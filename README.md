@@ -32,34 +32,24 @@ Download from the [Releases](https://github.com/Arsenalist/prx/releases) page. B
 
 ## Quick Start
 
-### 1. Initialize and configure
-
 ```bash
+# 1. Initialize the database
 prx init
-```
 
-Then add a GitHub instance and some repos:
-
-```bash
+# 2. Add a GitHub instance
 export GITHUB_TOKEN=ghp_your_token_here
-
 prx instance add github --url https://api.github.com --token-env GITHUB_TOKEN
-prx repo add your-org/your-repo --instance github
-```
 
-### 2. Fetch PR data
+# 3. Add repos to track
+prx repo add myorg/api --instance github
+prx repo add myorg/web --instance github
 
-```bash
+# 4. Fetch PR data
 prx fetch
-```
 
-### 3. View metrics
-
-```bash
+# 5. View metrics
 prx analyze
 ```
-
-That's it. You'll see a table with summary stats, developer metrics, and the slowest PRs.
 
 ## Configuration
 
@@ -80,134 +70,478 @@ prx import prx.yaml
 
 This migrates instances, repos, teams, and settings into the database.
 
-### GitHub instances
+---
 
-prx supports multiple GitHub instances (e.g., github.com + GitHub Enterprise):
+## Managing Instances
+
+An instance is a GitHub API endpoint. You need at least one.
 
 ```bash
 # Add GitHub.com
 prx instance add github --url https://api.github.com --token-env GITHUB_TOKEN
 
 # Add GitHub Enterprise
-prx instance add enterprise --url https://github.example.com/api/v3 --token-env GHE_TOKEN --tls-skip-verify
+prx instance add enterprise \
+  --url https://github.example.com/api/v3 \
+  --token-env GHE_TOKEN \
+  --tls-skip-verify
 
-# List instances
+# Update an existing instance (upserts by name)
+prx instance add github --url https://api.github.com --token-env NEW_TOKEN_VAR
+
+# List all instances
 prx instance list
+#   github               https://api.github.com (token: $GITHUB_TOKEN)
+#   enterprise           https://github.example.com/api/v3 (token: $GHE_TOKEN) [tls-skip-verify]
 
 # Remove an instance
 prx instance remove enterprise
 ```
 
-### Repositories
+The `--token-env` flag specifies the **name** of the environment variable holding your token (not the token itself). Set it in your shell:
 
 ```bash
-# Add a repo to track
-prx repo add org/api --instance github
-prx repo add org/web --instance github
-
-# List tracked repos
-prx repo list
-
-# Remove a repo
-prx repo remove org/web
+export GITHUB_TOKEN=ghp_abc123
+export GHE_TOKEN=ghp_def456
 ```
 
-### Teams
+---
 
-Group repos into teams for consolidated reporting:
+## Managing Repositories
+
+Repositories are tied to an instance. You must add an instance before adding repos.
+
+```bash
+# Add repos to the "github" instance
+prx repo add myorg/api --instance github
+prx repo add myorg/web --instance github
+prx repo add myorg/mobile --instance github
+
+# Add a repo from GitHub Enterprise
+prx repo add corp/internal-service --instance enterprise
+
+# List all tracked repos
+prx repo list
+#   myorg/api                                (instance: github)
+#   myorg/web                                (instance: github)
+#   myorg/mobile                             (instance: github)
+#   corp/internal-service                    (instance: enterprise)
+
+# Remove a repo (stops tracking, keeps existing data in DB)
+prx repo remove myorg/mobile
+```
+
+---
+
+## Managing Teams
+
+Teams group repos together for consolidated fetching, analysis, and reporting. A repo can belong to multiple teams.
+
+### Creating teams and adding repos
 
 ```bash
 # Create a team
 prx team create platform --display-name "Platform Engineering"
+prx team create frontend --display-name "Frontend Team"
 
-# Add repos to the team
-prx team add-repo platform org/api
-prx team add-repo platform org/web
+# Add repos to the platform team
+prx team add-repo platform myorg/api
+prx team add-repo platform myorg/web
 
-# List teams
-prx team list
+# Add repos to the frontend team (repos can be in multiple teams)
+prx team add-repo frontend myorg/web
+prx team add-repo frontend myorg/mobile
 
-# Show team details
-prx team show platform
-
-# Remove a repo from a team
-prx team remove-repo platform org/web
-
-# Delete a team
-prx team remove platform
+# Adding the same repo twice is a no-op (idempotent)
+prx team add-repo platform myorg/api
 ```
 
-### Settings
-
-Global settings are stored in the database. Use `prx config` to manage them:
+### Viewing teams
 
 ```bash
-# View all settings
+# List all teams with repo counts
+prx team list
+#   Platform Engineering (platform) — 2 repos
+#   Frontend Team (frontend) — 2 repos
+
+# Show which repos are in a team
+prx team show platform
+#   Team: Platform Engineering
+#   Repos (2):
+#     myorg/api
+#     myorg/web
+
+prx team show frontend
+#   Team: Frontend Team
+#   Repos (2):
+#     myorg/web
+#     myorg/mobile
+```
+
+### Removing repos from teams and deleting teams
+
+```bash
+# Remove a single repo from a team (does not delete the repo itself)
+prx team remove-repo frontend myorg/mobile
+
+# Verify it's gone
+prx team show frontend
+#   Team: Frontend Team
+#   Repos (1):
+#     myorg/web
+
+# Delete an entire team (does not delete the repos, just the grouping)
+prx team remove frontend
+```
+
+---
+
+## Fetching Data
+
+### Fetch everything
+
+```bash
+# Fetch all tracked repos
+prx fetch
+```
+
+### Fetch a single repo
+
+```bash
+prx fetch --repo myorg/api
+```
+
+### Fetch multiple specific repos
+
+```bash
+prx fetch --repo myorg/api --repo myorg/web
+```
+
+### Fetch by team
+
+```bash
+# Fetch all repos in the platform team
+prx fetch --team platform
+
+# Fetch repos from multiple teams
+prx fetch --team platform --team frontend
+```
+
+### Fetch modes
+
+```bash
+# Incremental (default) — skips closed/merged PRs already in DB
+prx fetch
+
+# Full re-fetch — re-downloads everything
+prx fetch --full
+
+# Dry run — shows what would be fetched without making API calls
+prx fetch --dry-run
+
+# Verbose — shows per-PR progress and API call details
+prx fetch --verbose
+```
+
+prx uses smart sync: closed/merged PRs already in the database are skipped. Only open PRs are re-fetched to check for updates.
+
+---
+
+## Analyzing Metrics
+
+### Analyze everything
+
+```bash
+# All repos, default date range (last 30 days)
+prx analyze
+```
+
+### Analyze by team
+
+```bash
+# Only repos in the platform team
+prx analyze --team platform
+
+# Multiple teams combined
+prx analyze --team platform --team frontend
+```
+
+### Analyze a single repo
+
+```bash
+prx analyze --repo myorg/api
+```
+
+### Analyze multiple specific repos
+
+```bash
+prx analyze --repo myorg/api --repo myorg/web
+```
+
+### Filter by author
+
+```bash
+# Single author
+prx analyze --author alice
+
+# Multiple authors
+prx analyze --author alice --author bob
+
+# Combine with team filter
+prx analyze --team platform --author alice
+```
+
+### Date ranges
+
+```bash
+# Presets
+prx analyze --preset last-7d
+prx analyze --preset last-30d
+prx analyze --preset this-month
+prx analyze --preset last-quarter
+
+# Explicit dates
+prx analyze --start 2026-01-01 --end 2026-03-31
+
+# CLI flags override the default preset in settings
+```
+
+Available presets: `last-7d`, `last-14d`, `last-30d`, `last-90d`, `this-week`, `last-week`, `this-month`, `last-month`, `this-quarter`.
+
+### Output formats
+
+```bash
+# Table (default) — human-readable
+prx analyze
+
+# JSON — structured, pipe-friendly
+prx analyze --format json
+prx analyze --format json | jq '.developers[] | {name, prs_per_week}'
+
+# Markdown — written to a file
+prx analyze --format markdown --output ./reports
+
+# All — table to stderr, JSON to stdout, markdown to file
+prx analyze --format all --output ./reports
+```
+
+---
+
+## Combined Fetch + Analyze
+
+The `report` command runs fetch followed by analyze in a single step:
+
+```bash
+# Fetch and analyze all repos
+prx report
+
+# Fetch and analyze a specific team
+prx report --team platform --preset last-month
+
+# Fetch and analyze specific repos
+prx report --repo myorg/api --repo myorg/web --preset last-7d
+
+# Skip fetch (analyze only, same as prx analyze)
+prx report --skip-fetch
+
+# Fetch only (same as prx fetch)
+prx report --fetch-only
+```
+
+---
+
+## JSON Summary for Agents
+
+`summarize` always outputs JSON, designed for piping to AI agents or scripts:
+
+```bash
+prx summarize --preset last-30d
+prx summarize --team platform
+prx summarize --repo myorg/api --author alice
+prx summarize | jq '.summary.total_prs'
+```
+
+---
+
+## Exporting Raw Data
+
+Export raw PR records as JSON or CSV:
+
+```bash
+# JSON to stdout (all repos, default date range)
+prx export
+
+# CSV to a file
+prx export --export-format csv --output prs.csv
+
+# Export a specific team's data
+prx export --team platform --preset last-90d
+
+# Export specific repos
+prx export --repo myorg/api --repo myorg/web
+
+# Export with date range
+prx export --start 2026-01-01 --end 2026-03-31 --export-format csv --output q1.csv
+```
+
+---
+
+## Settings
+
+Global settings are stored in the database. They control defaults for fetching, date ranges, output, and more.
+
+```bash
+# View all custom settings
 prx config list
 
 # Set a value
 prx config set date_range.preset last-30d
-prx config set fetch.states '["closed","open"]'
 prx config set output.format json
-prx config set output.directory ./reports
 
-# Get a specific setting
+# Get a specific setting (shows default if not set)
 prx config get fetch.per_page
 
 # Reset to default
 prx config reset output.format
 ```
 
-Available settings:
+### Available settings
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `fetch.states` | `["closed"]` | PR states to fetch |
+| `fetch.states` | `["closed"]` | PR states to fetch. Use `'["closed","open"]'` for both. |
 | `fetch.per_page` | `100` | PRs per API page |
 | `fetch.max_retries` | `3` | API retry count |
-| `fetch.rate_limit_buffer` | `100` | Warn when remaining requests drop below this |
-| `date_range.preset` | `last-30d` | Default date preset |
+| `fetch.rate_limit_buffer` | `100` | Warn when remaining API requests drop below this |
+| `date_range.preset` | `last-30d` | Default date preset for analysis |
 | `date_range.start` | | Explicit start date (YYYY-MM-DD) |
 | `date_range.end` | | Explicit end date (YYYY-MM-DD) |
-| `output.format` | `table` | Default output format |
-| `output.directory` | `./reports` | Directory for markdown reports |
-| `output.timezone` | | Timezone for reports |
-| `test_patterns` | (Go/JS/Java defaults) | JSON array of regex patterns |
-| `hooks` | | JSON object of hook definitions |
+| `output.format` | `table` | Default output format: `table`, `json`, `markdown`, `all` |
+| `output.directory` | `./reports` | Directory for markdown report files |
+| `output.timezone` | | Timezone for reports (e.g., `America/Toronto`) |
+| `test_patterns` | (Go/JS/Java defaults) | JSON array of regex patterns to classify test files |
+| `hooks` | | JSON object of hook definitions (see Hooks section) |
 
-### Date range presets
+### Examples
 
-Available presets: `last-7d`, `last-14d`, `last-30d`, `last-90d`, `this-week`, `last-week`, `this-month`, `last-month`, `this-quarter`.
+```bash
+# Fetch both open and closed PRs
+prx config set fetch.states '["closed","open"]'
+
+# Set default analysis window to 90 days
+prx config set date_range.preset last-90d
+
+# Always output JSON
+prx config set output.format json
+
+# Custom test patterns for a Python project
+prx config set test_patterns '["test_.*\\.py$", "/tests/", "_test\\.py$"]'
+```
 
 ### Test file patterns
 
-prx classifies LOC as test vs production using regex patterns. The defaults cover Go, JavaScript/TypeScript, and Java conventions. Customize with:
+prx classifies each file change as test or production code using regex patterns. The defaults cover Go (`_test.go`), JavaScript/TypeScript (`.test.ts`, `.spec.js`, `__tests__/`), and Java (`Test.java`). Override them for your stack:
 
 ```bash
-prx config set test_patterns '["_test\\.go$", "\\.test\\.(ts|js)$", "/__tests__/"]'
+# Python project
+prx config set test_patterns '["test_.*\\.py$", "/tests/", "_test\\.py$"]'
+
+# Ruby project
+prx config set test_patterns '["_spec\\.rb$", "/spec/", "_test\\.rb$"]'
+
+# Reset to built-in defaults
+prx config reset test_patterns
 ```
 
 ### Hooks
 
-Run commands after events. The analysis result JSON is piped to stdin:
+Run shell commands after events. The analysis result JSON is piped to the command's stdin:
 
 ```bash
 prx config set hooks '{"post-analyze": [{"name": "slack", "command": "curl -X POST $SLACK_WEBHOOK -d @-", "timeout": 10}]}'
 ```
 
-## Usage
+---
 
-### Getting help
+## Direct Database Access
 
-Every command supports `--help`:
+Power users and AI agents can query the SQLite database directly:
 
 ```bash
-prx --help              # list all commands and global flags
-prx fetch --help        # help for a specific command
-prx team --help         # help for subcommand groups
+# Print the database file path
+prx db path
+
+# Show table sizes
+prx db stats
+
+# Run arbitrary SQL queries (read-only)
+prx db query "SELECT author, count(*) as prs FROM pull_requests GROUP BY author ORDER BY prs DESC LIMIT 10"
+prx db query "SELECT count(*) as n FROM pull_requests WHERE state = 'merged'"
+
+# Dump the raw GitHub API JSON blob for a specific PR
+prx db raw myorg/api 123
 ```
 
-### Global flags
+---
+
+## Typical Workflows
+
+### Single repo, quick check
+
+```bash
+prx instance add github --url https://api.github.com --token-env GITHUB_TOKEN
+prx repo add myorg/api --instance github
+prx report --preset last-7d
+```
+
+### Multi-repo team setup
+
+```bash
+# Setup
+prx instance add github --url https://api.github.com --token-env GITHUB_TOKEN
+prx repo add myorg/api --instance github
+prx repo add myorg/web --instance github
+prx repo add myorg/mobile --instance github
+prx team create platform --display-name "Platform Engineering"
+prx team add-repo platform myorg/api
+prx team add-repo platform myorg/web
+
+# Weekly team report
+prx report --team platform --preset last-week
+
+# Monthly report as markdown
+prx report --team platform --preset last-month --format markdown --output ./reports
+
+# Compare two repos
+prx analyze --repo myorg/api --repo myorg/web --preset last-30d
+```
+
+### Multi-instance (GitHub.com + Enterprise)
+
+```bash
+prx instance add github --url https://api.github.com --token-env GITHUB_TOKEN
+prx instance add enterprise --url https://github.corp.com/api/v3 --token-env GHE_TOKEN
+prx repo add oss/sdk --instance github
+prx repo add corp/backend --instance enterprise
+prx team create all-repos
+prx team add-repo all-repos oss/sdk
+prx team add-repo all-repos corp/backend
+prx report --team all-repos
+```
+
+### Exporting for external analysis
+
+```bash
+# CSV for spreadsheets
+prx export --team platform --preset last-90d --export-format csv --output platform-q1.csv
+
+# JSON for scripts
+prx export --repo myorg/api --start 2026-01-01 --end 2026-03-31 | jq '.[].author' | sort | uniq -c | sort -rn
+```
+
+---
+
+## Global Flags
 
 | Flag | Description |
 |------|-------------|
@@ -216,71 +550,7 @@ prx team --help         # help for subcommand groups
 | `--quiet` | Suppress non-essential output |
 | `--verbose` | Verbose/debug output |
 
-### Fetching data
-
-```bash
-prx fetch                          # fetch all repos
-prx fetch --repo org/repo          # fetch a specific repo
-prx fetch --team platform          # fetch all repos in a team
-prx fetch --full                   # re-fetch everything (ignore cache)
-prx fetch --dry-run                # show what would be fetched
-prx fetch --verbose                # detailed per-PR progress
-```
-
-prx uses smart sync: closed/merged PRs already in the database are skipped, only open PRs are re-fetched.
-
-### Analyzing metrics
-
-```bash
-prx analyze                                  # analyze all data
-prx analyze --preset last-30d                # last 30 days
-prx analyze --start 2026-01-01 --end 2026-03-31
-prx analyze --team platform                  # filter by team
-prx analyze --author alice --author bob      # filter by author
-prx analyze --format json                    # JSON output
-prx analyze --format markdown --output ./reports
-```
-
-### Combined fetch + analyze
-
-```bash
-prx report                         # fetch then analyze
-prx report --team platform --preset last-month
-prx report --skip-fetch            # analyze only (same as prx analyze)
-prx report --fetch-only            # fetch only (same as prx fetch)
-```
-
-### JSON summary for agents
-
-```bash
-prx summarize --preset last-30d    # JSON to stdout, pipe-friendly
-prx summarize | jq '.summary.total_prs'
-```
-
-### Exporting data
-
-```bash
-prx export                                    # JSON to stdout
-prx export --export-format csv --output prs.csv
-prx export --team platform --preset last-90d
-```
-
-### Direct database access
-
-```bash
-prx db path                        # print database file path
-prx db stats                       # show table row counts
-prx db query "SELECT count(*) as n FROM pull_requests"
-prx db raw org/repo 123            # dump raw JSON blob for PR #123
-```
-
-### Version
-
-```bash
-prx version
-```
-
-## Output formats
+## Output Formats
 
 | Format | Description |
 |--------|-------------|
@@ -296,6 +566,21 @@ prx calculates the following metrics:
 - **Summary**: total PRs, merged/closed/open counts, unique authors, total LOC (test vs production), average and median LOC per PR, average and median time to merge
 - **Developer stats**: merged PRs, PRs per week, average LOC (total/test/production), average time to open, time to merge, and total time
 - **Slowest PRs**: ranked by total time, showing time-to-open, draft time, time-to-merge, and LOC
+
+## Getting Help
+
+Every command and subcommand supports `--help`:
+
+```bash
+prx --help
+prx instance --help
+prx instance add --help
+prx team --help
+prx team add-repo --help
+prx config set --help
+prx fetch --help
+prx analyze --help
+```
 
 ## License
 
