@@ -1,18 +1,13 @@
 package cmd
 
 import (
-	"fmt"
-
 	"github.com/spf13/cobra"
 )
 
 var reportCmd = &cobra.Command{
 	Use:   "report",
 	Short: "Fetch and analyze in one step (fetch + analyze)",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("report: not implemented yet")
-		return nil
-	},
+	RunE:  runReport,
 }
 
 func init() {
@@ -26,5 +21,28 @@ func init() {
 	reportCmd.Flags().String("group-by", "", "group results: repo, team, author")
 	reportCmd.Flags().Bool("skip-fetch", false, "skip the fetch step")
 	reportCmd.Flags().Bool("fetch-only", false, "stop after fetching")
+	reportCmd.Flags().StringSlice("author", nil, "filter to specific author(s)")
+	reportCmd.Flags().String("sort", "", "sort: prs-per-week, total-prs, avg-loc, avg-time-to-merge")
+	reportCmd.Flags().Int("top", 0, "show only top N developers")
+	reportCmd.Flags().String("output", "", "output directory for markdown files")
 	rootCmd.AddCommand(reportCmd)
+}
+
+func runReport(cmd *cobra.Command, args []string) error {
+	skipFetch, _ := cmd.Flags().GetBool("skip-fetch")
+	fetchOnly, _ := cmd.Flags().GetBool("fetch-only")
+
+	// Step 1: Fetch (unless --skip-fetch)
+	if !skipFetch {
+		if err := runFetch(cmd, args); err != nil {
+			return err
+		}
+	}
+
+	// Step 2: Analyze (unless --fetch-only)
+	if fetchOnly {
+		return nil
+	}
+
+	return runAnalyze(cmd, args)
 }
