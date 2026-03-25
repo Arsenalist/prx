@@ -161,7 +161,7 @@ repos:
 	assert.Equal(t, 100, cfg.Fetch.PerPage)
 	assert.Equal(t, 3, cfg.Fetch.MaxRetries)
 	assert.Equal(t, 100, cfg.Fetch.RateLimitBuffer)
-	assert.Equal(t, []string{"closed", "open"}, cfg.Fetch.States)
+	assert.Equal(t, []string{"closed"}, cfg.Fetch.States)
 	assert.Equal(t, "last-30d", cfg.DateRange.Preset)
 	assert.Equal(t, "table", cfg.Output.Format)
 	assert.Equal(t, "./reports", cfg.Output.Directory)

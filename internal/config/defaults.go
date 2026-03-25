@@ -42,7 +42,7 @@ func ApplyDefaults(cfg *Config) {
 		cfg.Fetch.RateLimitBuffer = 100
 	}
 	if len(cfg.Fetch.States) == 0 {
-		cfg.Fetch.States = []string{"closed", "open"}
+		cfg.Fetch.States = []string{"closed"}
 	}
 	if cfg.DateRange.Preset == "" && cfg.DateRange.Start == "" {
 		cfg.DateRange.Preset = "last-30d"

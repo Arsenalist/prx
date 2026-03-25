@@ -56,7 +56,6 @@ repos:
 # fetch:
 #   states:
 #     - closed
-#     - open
 #   per_page: 100
 #   max_retries: 3
 #   rate_limit_buffer: 100
