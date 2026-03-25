@@ -55,6 +55,7 @@ type Store interface {
 	// Power user / agent
 	RawQuery(sql string) ([]map[string]interface{}, error)
 	Stats() (*StoreStats, error)
+	ResetAll() error
 }
 
 // InstanceRecord represents a row in the instances table.

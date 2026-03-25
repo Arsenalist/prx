@@ -654,3 +654,22 @@ func (s *SQLiteStore) Stats() (*store.StoreStats, error) {
 
 	return stats, nil
 }
+
+// ResetAll deletes all data from every table except schema_version.
+func (s *SQLiteStore) ResetAll() error {
+	tables := []string{
+		"timeline_events", "file_changes", "branch_info", "fetch_metadata",
+		"pull_requests", "team_repos", "repositories", "teams", "instances", "settings",
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	for _, table := range tables {
+		if _, err := tx.Exec("DELETE FROM " + table); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("clearing %s: %w", table, err)
+		}
+	}
+	return tx.Commit()
+}

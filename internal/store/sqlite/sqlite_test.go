@@ -570,3 +570,39 @@ func TestMigrateV1ToV2(t *testing.T) {
 
 	s.Close()
 }
+
+func TestResetAll(t *testing.T) {
+	s := newTestDB(t)
+
+	// Populate data
+	instID, _ := s.UpsertInstance(store.InstanceRecord{Name: "gh", Type: "github", BaseURL: "https://api.github.com", TokenEnv: "GH_TOKEN"})
+	repoID, _ := s.UpsertRepository(store.RepositoryRecord{InstanceID: instID, Owner: "org", Name: "repo", FullName: "org/repo"})
+	teamID, _ := s.UpsertTeam(store.TeamRecord{Name: "team1"})
+	s.AddTeamRepo(teamID, repoID)
+	s.SetSetting("foo", "bar")
+	s.UpsertPullRequest(store.PullRequestRecord{
+		RepoID: repoID, Number: 1, Title: "PR", State: "merged",
+		Author: "alice", URL: "https://example.com", CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-02T00:00:00Z",
+	})
+
+	// Verify data exists
+	stats, _ := s.Stats()
+	totalBefore := int64(0)
+	for _, count := range stats.Tables {
+		totalBefore += count
+	}
+	assert.Greater(t, totalBefore, int64(0))
+
+	// Reset
+	require.NoError(t, s.ResetAll())
+
+	// Verify all tables are empty
+	stats, _ = s.Stats()
+	for table, count := range stats.Tables {
+		assert.Equal(t, int64(0), count, "table %s should be empty after reset", table)
+	}
+
+	// Verify DB is still functional (can insert again)
+	_, err := s.UpsertInstance(store.InstanceRecord{Name: "new", Type: "github", BaseURL: "https://api.github.com", TokenEnv: "TOKEN"})
+	assert.NoError(t, err)
+}
