@@ -40,6 +40,7 @@ func runFetch(cmd *cobra.Command, args []string) error {
 	full, _ := cmd.Flags().GetBool("full")
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 	repoFlags, _ := cmd.Flags().GetStringSlice("repo")
+	teamFlags, _ := cmd.Flags().GetStringSlice("team")
 
 	// Open database
 	db := sqlite.New(cfg.Storage.SQLite.Path)
@@ -52,7 +53,12 @@ func runFetch(cmd *cobra.Command, args []string) error {
 	}
 
 	// Resolve which repos to fetch
-	repos := resolveRepos(cfg, repoFlags)
+	var repos []repoRef
+	if len(teamFlags) > 0 {
+		repos = resolveTeamRepos(cfg, teamFlags)
+	} else {
+		repos = resolveRepos(cfg, repoFlags)
+	}
 	if len(repos) == 0 {
 		return fmt.Errorf("no repos to fetch (check config or --repo flag)")
 	}

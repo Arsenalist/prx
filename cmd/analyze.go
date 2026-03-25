@@ -54,6 +54,7 @@ func runAnalyze(cmd *cobra.Command, args []string) error {
 
 	// Resolve repos to analyze
 	repoFlags, _ := cmd.Flags().GetStringSlice("repo")
+	teamFlags, _ := cmd.Flags().GetStringSlice("team")
 	authors, _ := cmd.Flags().GetStringSlice("author")
 
 	startStr := startDate.Format("2006-01-02")
@@ -63,6 +64,14 @@ func runAnalyze(cmd *cobra.Command, args []string) error {
 		Authors:   authors,
 		StartDate: startStr,
 		EndDate:   endStr,
+	}
+
+	// If --team specified, expand to repo names
+	if len(teamFlags) > 0 {
+		teamRefs := resolveTeamRepos(cfg, teamFlags)
+		for _, ref := range teamRefs {
+			repoFlags = append(repoFlags, ref.repo)
+		}
 	}
 
 	repoNames, err := resolveRepoIDs(db, cfg, repoFlags, &filters)
@@ -85,6 +94,7 @@ func runAnalyze(cmd *cobra.Command, args []string) error {
 		EndDate:   endStr,
 		Repos:     repoNames,
 	})
+	result.Meta.Team = teamNameFromFlags(teamFlags)
 
 	return outputResult(cmd, cfg, result)
 }
