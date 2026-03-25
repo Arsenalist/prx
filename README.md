@@ -10,6 +10,14 @@ PR analytics for engineering teams. Fetches pull request data from GitHub (inclu
 go install github.com/Arsenalist/prx@latest
 ```
 
+Make sure `$GOPATH/bin` is in your `PATH`. If `GOPATH` is not set, Go defaults to `~/go`:
+
+```bash
+export PATH="$PATH:$(go env GOPATH)/bin"
+```
+
+Add that line to your `~/.zshrc` or `~/.bashrc` to make it permanent.
+
 ### Build from source
 
 ```bash
