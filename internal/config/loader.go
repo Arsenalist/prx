@@ -74,23 +74,34 @@ func Resolve(explicit string) (string, string, error) {
 }
 
 // expandEnvVars replaces ${VAR_NAME} references with environment variable values.
-// Returns an error if any referenced variable is not set.
+// Only expands in non-comment lines. Returns an error if any referenced variable is not set.
 func expandEnvVars(input string) (string, error) {
 	var missing []string
+	var result []string
 
-	result := envVarPattern.ReplaceAllStringFunc(input, func(match string) string {
-		varName := envVarPattern.FindStringSubmatch(match)[1]
-		val, ok := os.LookupEnv(varName)
-		if !ok {
-			missing = append(missing, varName)
-			return match
+	for _, line := range strings.Split(input, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") {
+			// Leave comment lines untouched — don't expand env vars in comments
+			result = append(result, line)
+			continue
 		}
-		return val
-	})
+
+		expanded := envVarPattern.ReplaceAllStringFunc(line, func(match string) string {
+			varName := envVarPattern.FindStringSubmatch(match)[1]
+			val, ok := os.LookupEnv(varName)
+			if !ok {
+				missing = append(missing, varName)
+				return match
+			}
+			return val
+		})
+		result = append(result, expanded)
+	}
 
 	if len(missing) > 0 {
 		return "", fmt.Errorf("undefined environment variable(s): %s", strings.Join(missing, ", "))
 	}
 
-	return result, nil
+	return strings.Join(result, "\n"), nil
 }

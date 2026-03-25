@@ -213,6 +213,33 @@ repos:
 	assert.Contains(t, err.Error(), "NONEXISTENT_VAR_12345")
 }
 
+func TestEnvVarInCommentIgnored(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "prx.yaml")
+	yaml := `
+instances:
+  default:
+    base_url: "https://api.github.com"
+    token:
+      env: GITHUB_TOKEN
+repos:
+  - instance: default
+    repo: "owner/repo"
+# hooks:
+#   post-analyze:
+#     - name: slack
+#       command: "curl $SLACK_URL"
+#       env:
+#         WEBHOOK: "${TOTALLY_UNDEFINED_VAR}"
+`
+	require.NoError(t, os.WriteFile(path, []byte(yaml), 0644))
+	os.Unsetenv("TOTALLY_UNDEFINED_VAR")
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	assert.NotNil(t, cfg)
+}
+
 func TestValidationNoInstances(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "prx.yaml")
