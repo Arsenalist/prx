@@ -7,8 +7,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// resolveDateRange determines the start/end dates from CLI flags, presets, or config defaults.
-func resolveDateRange(cmd *cobra.Command, cfg *config.Config) (time.Time, time.Time) {
+// resolveDateRange determines the start/end dates from CLI flags, presets, or settings defaults.
+func resolveDateRange(cmd *cobra.Command, s *config.Settings) (time.Time, time.Time) {
 	now := time.Now()
 
 	// CLI flags take highest priority
@@ -16,15 +16,15 @@ func resolveDateRange(cmd *cobra.Command, cfg *config.Config) (time.Time, time.T
 	endStr, _ := cmd.Flags().GetString("end")
 	preset, _ := cmd.Flags().GetString("preset")
 
-	// Fall back to config
+	// Fall back to settings
 	if startStr == "" {
-		startStr = cfg.DateRange.Start
+		startStr = s.DateRange.Start
 	}
 	if endStr == "" {
-		endStr = cfg.DateRange.End
+		endStr = s.DateRange.End
 	}
 	if preset == "" && startStr == "" && endStr == "" {
-		preset = cfg.DateRange.Preset
+		preset = s.DateRange.Preset
 	}
 
 	// If explicit dates provided, use them

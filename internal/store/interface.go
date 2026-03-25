@@ -14,9 +14,28 @@ type Store interface {
 	UpsertInstance(inst InstanceRecord) (int64, error)
 	UpsertRepository(repo RepositoryRecord) (int64, error)
 
+	// Instance management
+	ListInstances() ([]InstanceRecord, error)
+	DeleteInstance(name string) error
+
+	// Repository management
+	DeleteRepository(instanceID int64, fullName string) error
+
 	// Team management
 	UpsertTeam(team TeamRecord) (int64, error)
 	SetTeamRepos(teamID int64, repoIDs []int64) error
+	ListTeams() ([]TeamRecord, error)
+	GetTeamByName(name string) (*TeamRecord, error)
+	DeleteTeam(name string) error
+	GetTeamRepos(teamID int64) ([]RepositoryRecord, error)
+	AddTeamRepo(teamID int64, repoID int64) error
+	RemoveTeamRepo(teamID int64, repoID int64) error
+
+	// Settings
+	GetSetting(key string) (string, error)
+	SetSetting(key, value string) error
+	DeleteSetting(key string) error
+	ListSettings() (map[string]string, error)
 
 	// Pull request operations
 	UpsertPullRequest(pr PullRequestRecord) (int64, error)
@@ -40,10 +59,12 @@ type Store interface {
 
 // InstanceRecord represents a row in the instances table.
 type InstanceRecord struct {
-	ID      int64  `json:"id"`
-	Name    string `json:"name"`
-	Type    string `json:"type"`
-	BaseURL string `json:"base_url"`
+	ID            int64  `json:"id"`
+	Name          string `json:"name"`
+	Type          string `json:"type"`
+	BaseURL       string `json:"base_url"`
+	TokenEnv      string `json:"token_env"`
+	TLSSkipVerify bool   `json:"tls_skip_verify"`
 }
 
 // RepositoryRecord represents a row in the repositories table.

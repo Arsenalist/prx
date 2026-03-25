@@ -6,7 +6,6 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/Arsenalist/prx/internal/store/sqlite"
 	"github.com/spf13/cobra"
 )
 
@@ -50,29 +49,21 @@ func init() {
 }
 
 func runDBPath(cmd *cobra.Command, args []string) error {
-	cfg, err := loadConfig()
-	if err != nil {
-		return err
-	}
-	fmt.Println(cfg.Storage.SQLite.Path)
+	fmt.Println(resolveDBPath())
 	return nil
 }
 
 func runDBStats(cmd *cobra.Command, args []string) error {
-	cfg, err := loadConfig()
+	db, cleanup, err := openDB()
 	if err != nil {
 		return err
 	}
+	defer cleanup()
 
-	db := sqlite.New(cfg.Storage.SQLite.Path)
-	if err := db.Open(); err != nil {
-		return fmt.Errorf("opening database: %w", err)
-	}
-	defer db.Close()
-
-	info, err := os.Stat(cfg.Storage.SQLite.Path)
+	path := resolveDBPath()
+	info, err := os.Stat(path)
 	if err == nil {
-		fmt.Printf("Database: %s (%.1f MB)\n", cfg.Storage.SQLite.Path, float64(info.Size())/(1024*1024))
+		fmt.Printf("Database: %s (%.1f MB)\n", path, float64(info.Size())/(1024*1024))
 	}
 
 	stats, err := db.Stats()
@@ -86,16 +77,11 @@ func runDBStats(cmd *cobra.Command, args []string) error {
 }
 
 func runDBQuery(cmd *cobra.Command, args []string) error {
-	cfg, err := loadConfig()
+	db, cleanup, err := openDB()
 	if err != nil {
 		return err
 	}
-
-	db := sqlite.New(cfg.Storage.SQLite.Path)
-	if err := db.Open(); err != nil {
-		return fmt.Errorf("opening database: %w", err)
-	}
-	defer db.Close()
+	defer cleanup()
 
 	rows, err := db.RawQuery(args[0])
 	if err != nil {
@@ -111,16 +97,11 @@ func runDBQuery(cmd *cobra.Command, args []string) error {
 }
 
 func runDBRaw(cmd *cobra.Command, args []string) error {
-	cfg, err := loadConfig()
+	db, cleanup, err := openDB()
 	if err != nil {
 		return err
 	}
-
-	db := sqlite.New(cfg.Storage.SQLite.Path)
-	if err := db.Open(); err != nil {
-		return fmt.Errorf("opening database: %w", err)
-	}
-	defer db.Close()
+	defer cleanup()
 
 	repoName := args[0]
 	prNumber, err := strconv.Atoi(args[1])

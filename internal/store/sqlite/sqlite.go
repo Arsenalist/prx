@@ -62,6 +62,28 @@ func (s *SQLiteStore) Migrate() error {
 		if err != nil {
 			return fmt.Errorf("recording schema version: %w", err)
 		}
+		version = 1
+	}
+
+	if version < 2 {
+		// V2 adds columns to instances and creates settings table.
+		// Execute ALTER TABLE statements individually (SQLite doesn't support multiple in one Exec).
+		for _, stmt := range []string{
+			"ALTER TABLE instances ADD COLUMN token_env TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE instances ADD COLUMN tls_skip_verify INTEGER NOT NULL DEFAULT 0",
+			`CREATE TABLE IF NOT EXISTS settings (
+				key   TEXT PRIMARY KEY,
+				value TEXT NOT NULL
+			)`,
+		} {
+			if _, err := s.db.Exec(stmt); err != nil {
+				return fmt.Errorf("applying schema v2: %w", err)
+			}
+		}
+		_, err := s.db.Exec("INSERT INTO schema_version (version, applied_at) VALUES (2, ?)", time.Now().UTC().Format(time.RFC3339))
+		if err != nil {
+			return fmt.Errorf("recording schema version: %w", err)
+		}
 	}
 
 	return nil
@@ -70,35 +92,69 @@ func (s *SQLiteStore) Migrate() error {
 // --- Instance operations ---
 
 func (s *SQLiteStore) UpsertInstance(inst store.InstanceRecord) (int64, error) {
-	res, err := s.db.Exec(`
-		INSERT INTO instances (name, type, base_url) VALUES (?, ?, ?)
-		ON CONFLICT(name) DO UPDATE SET type=excluded.type, base_url=excluded.base_url
-	`, inst.Name, inst.Type, inst.BaseURL)
+	tlsSkip := 0
+	if inst.TLSSkipVerify {
+		tlsSkip = 1
+	}
+	_, err := s.db.Exec(`
+		INSERT INTO instances (name, type, base_url, token_env, tls_skip_verify) VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(name) DO UPDATE SET type=excluded.type, base_url=excluded.base_url,
+			token_env=excluded.token_env, tls_skip_verify=excluded.tls_skip_verify
+	`, inst.Name, inst.Type, inst.BaseURL, inst.TokenEnv, tlsSkip)
 	if err != nil {
 		return 0, err
 	}
 
-	// ON CONFLICT doesn't set last_insert_rowid, so query it
 	var id int64
 	err = s.db.QueryRow("SELECT id FROM instances WHERE name = ?", inst.Name).Scan(&id)
-	if err != nil {
-		return 0, err
-	}
-	_ = res
-	return id, nil
+	return id, err
 }
 
 func (s *SQLiteStore) GetInstanceByName(name string) (*store.InstanceRecord, error) {
 	var inst store.InstanceRecord
-	err := s.db.QueryRow("SELECT id, name, type, base_url FROM instances WHERE name = ?", name).
-		Scan(&inst.ID, &inst.Name, &inst.Type, &inst.BaseURL)
+	var tlsSkip int
+	err := s.db.QueryRow("SELECT id, name, type, base_url, token_env, tls_skip_verify FROM instances WHERE name = ?", name).
+		Scan(&inst.ID, &inst.Name, &inst.Type, &inst.BaseURL, &inst.TokenEnv, &tlsSkip)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	inst.TLSSkipVerify = tlsSkip == 1
 	return &inst, nil
+}
+
+func (s *SQLiteStore) ListInstances() ([]store.InstanceRecord, error) {
+	rows, err := s.db.Query("SELECT id, name, type, base_url, token_env, tls_skip_verify FROM instances ORDER BY name")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var instances []store.InstanceRecord
+	for rows.Next() {
+		var inst store.InstanceRecord
+		var tlsSkip int
+		if err := rows.Scan(&inst.ID, &inst.Name, &inst.Type, &inst.BaseURL, &inst.TokenEnv, &tlsSkip); err != nil {
+			return nil, err
+		}
+		inst.TLSSkipVerify = tlsSkip == 1
+		instances = append(instances, inst)
+	}
+	return instances, rows.Err()
+}
+
+func (s *SQLiteStore) DeleteInstance(name string) error {
+	result, err := s.db.Exec("DELETE FROM instances WHERE name = ?", name)
+	if err != nil {
+		return err
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("instance %q not found", name)
+	}
+	return nil
 }
 
 // --- Repository operations ---
@@ -146,6 +202,18 @@ func (s *SQLiteStore) GetRepositoryByName(instanceID int64, fullName string) (*s
 	return &r, err
 }
 
+func (s *SQLiteStore) DeleteRepository(instanceID int64, fullName string) error {
+	result, err := s.db.Exec("DELETE FROM repositories WHERE instance_id = ? AND full_name = ?", instanceID, fullName)
+	if err != nil {
+		return err
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("repository %q not found", fullName)
+	}
+	return nil
+}
+
 // --- Team operations ---
 
 func (s *SQLiteStore) UpsertTeam(team store.TeamRecord) (int64, error) {
@@ -178,6 +246,146 @@ func (s *SQLiteStore) SetTeamRepos(teamID int64, repoIDs []int64) error {
 		}
 	}
 	return tx.Commit()
+}
+
+func (s *SQLiteStore) ListTeams() ([]store.TeamRecord, error) {
+	rows, err := s.db.Query("SELECT id, name, display_name FROM teams ORDER BY name")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var teams []store.TeamRecord
+	for rows.Next() {
+		var t store.TeamRecord
+		if err := rows.Scan(&t.ID, &t.Name, &t.DisplayName); err != nil {
+			return nil, err
+		}
+		teams = append(teams, t)
+	}
+	return teams, rows.Err()
+}
+
+func (s *SQLiteStore) GetTeamByName(name string) (*store.TeamRecord, error) {
+	var t store.TeamRecord
+	err := s.db.QueryRow("SELECT id, name, display_name FROM teams WHERE name = ?", name).
+		Scan(&t.ID, &t.Name, &t.DisplayName)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
+func (s *SQLiteStore) DeleteTeam(name string) error {
+	// Get team ID first to clean up team_repos
+	var teamID int64
+	err := s.db.QueryRow("SELECT id FROM teams WHERE name = ?", name).Scan(&teamID)
+	if err == sql.ErrNoRows {
+		return fmt.Errorf("team %q not found", name)
+	}
+	if err != nil {
+		return err
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec("DELETE FROM team_repos WHERE team_id = ?", teamID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("DELETE FROM teams WHERE id = ?", teamID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *SQLiteStore) GetTeamRepos(teamID int64) ([]store.RepositoryRecord, error) {
+	rows, err := s.db.Query(`
+		SELECT r.id, r.instance_id, r.owner, r.name, r.full_name
+		FROM repositories r
+		JOIN team_repos tr ON tr.repo_id = r.id
+		WHERE tr.team_id = ?
+		ORDER BY r.full_name
+	`, teamID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var repos []store.RepositoryRecord
+	for rows.Next() {
+		var r store.RepositoryRecord
+		if err := rows.Scan(&r.ID, &r.InstanceID, &r.Owner, &r.Name, &r.FullName); err != nil {
+			return nil, err
+		}
+		repos = append(repos, r)
+	}
+	return repos, rows.Err()
+}
+
+func (s *SQLiteStore) AddTeamRepo(teamID int64, repoID int64) error {
+	_, err := s.db.Exec("INSERT OR IGNORE INTO team_repos (team_id, repo_id) VALUES (?, ?)", teamID, repoID)
+	return err
+}
+
+func (s *SQLiteStore) RemoveTeamRepo(teamID int64, repoID int64) error {
+	result, err := s.db.Exec("DELETE FROM team_repos WHERE team_id = ? AND repo_id = ?", teamID, repoID)
+	if err != nil {
+		return err
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("repo not in team")
+	}
+	return nil
+}
+
+// --- Settings operations ---
+
+func (s *SQLiteStore) GetSetting(key string) (string, error) {
+	var value string
+	err := s.db.QueryRow("SELECT value FROM settings WHERE key = ?", key).Scan(&value)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return value, err
+}
+
+func (s *SQLiteStore) SetSetting(key, value string) error {
+	_, err := s.db.Exec(`
+		INSERT INTO settings (key, value) VALUES (?, ?)
+		ON CONFLICT(key) DO UPDATE SET value=excluded.value
+	`, key, value)
+	return err
+}
+
+func (s *SQLiteStore) DeleteSetting(key string) error {
+	_, err := s.db.Exec("DELETE FROM settings WHERE key = ?", key)
+	return err
+}
+
+func (s *SQLiteStore) ListSettings() (map[string]string, error) {
+	rows, err := s.db.Query("SELECT key, value FROM settings ORDER BY key")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	settings := make(map[string]string)
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			return nil, err
+		}
+		settings[k] = v
+	}
+	return settings, rows.Err()
 }
 
 // --- Pull request operations ---
@@ -435,7 +643,7 @@ func (s *SQLiteStore) Stats() (*store.StoreStats, error) {
 	}
 
 	// Row counts for each table
-	tables := []string{"instances", "repositories", "teams", "pull_requests", "branch_info", "file_changes", "timeline_events", "fetch_metadata"}
+	tables := []string{"instances", "repositories", "teams", "pull_requests", "branch_info", "file_changes", "timeline_events", "fetch_metadata", "settings"}
 	for _, table := range tables {
 		var count int64
 		if err := s.db.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count); err != nil {

@@ -6,7 +6,6 @@ import (
 	"github.com/Arsenalist/prx/internal/metrics"
 	"github.com/Arsenalist/prx/internal/report"
 	"github.com/Arsenalist/prx/internal/store"
-	"github.com/Arsenalist/prx/internal/store/sqlite"
 	"github.com/spf13/cobra"
 )
 
@@ -27,21 +26,18 @@ func init() {
 }
 
 func runSummarize(cmd *cobra.Command, args []string) error {
-	cfg, err := loadConfig()
+	db, cleanup, err := openDB()
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	settings, err := loadSettings(db)
 	if err != nil {
 		return err
 	}
 
-	db := sqlite.New(cfg.Storage.SQLite.Path)
-	if err := db.Open(); err != nil {
-		return fmt.Errorf("opening database: %w", err)
-	}
-	defer db.Close()
-	if err := db.Migrate(); err != nil {
-		return fmt.Errorf("migrating database: %w", err)
-	}
-
-	startDate, endDate := resolveDateRange(cmd, cfg)
+	startDate, endDate := resolveDateRange(cmd, settings)
 	repoFlags, _ := cmd.Flags().GetStringSlice("repo")
 	authors, _ := cmd.Flags().GetStringSlice("author")
 
@@ -54,7 +50,7 @@ func runSummarize(cmd *cobra.Command, args []string) error {
 		EndDate:   endStr,
 	}
 
-	repoNames, err := resolveRepoIDs(db, cfg, repoFlags, &filters)
+	repoNames, err := resolveRepoIDs(db, repoFlags, &filters)
 	if err != nil {
 		return err
 	}

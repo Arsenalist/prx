@@ -8,7 +8,6 @@ import (
 	"strconv"
 
 	"github.com/Arsenalist/prx/internal/store"
-	"github.com/Arsenalist/prx/internal/store/sqlite"
 	"github.com/spf13/cobra"
 )
 
@@ -30,21 +29,18 @@ func init() {
 }
 
 func runExport(cmd *cobra.Command, args []string) error {
-	cfg, err := loadConfig()
+	db, cleanup, err := openDB()
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	settings, err := loadSettings(db)
 	if err != nil {
 		return err
 	}
 
-	db := sqlite.New(cfg.Storage.SQLite.Path)
-	if err := db.Open(); err != nil {
-		return fmt.Errorf("opening database: %w", err)
-	}
-	defer db.Close()
-	if err := db.Migrate(); err != nil {
-		return fmt.Errorf("migrating database: %w", err)
-	}
-
-	startDate, endDate := resolveDateRange(cmd, cfg)
+	startDate, endDate := resolveDateRange(cmd, settings)
 	repoFlags, _ := cmd.Flags().GetStringSlice("repo")
 	teamFlags, _ := cmd.Flags().GetStringSlice("team")
 
@@ -57,13 +53,14 @@ func runExport(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(teamFlags) > 0 {
-		teamRefs := resolveTeamRepos(cfg, teamFlags)
-		for _, ref := range teamRefs {
-			repoFlags = append(repoFlags, ref.repo)
+		teamRepos, err := resolveTeamReposFromDB(db, teamFlags)
+		if err != nil {
+			return err
 		}
+		repoFlags = append(repoFlags, teamRepos...)
 	}
 
-	if _, err := resolveRepoIDs(db, cfg, repoFlags, &filters); err != nil {
+	if _, err := resolveRepoIDs(db, repoFlags, &filters); err != nil {
 		return err
 	}
 

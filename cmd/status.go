@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/Arsenalist/prx/internal/store/sqlite"
 	"github.com/spf13/cobra"
 )
 
@@ -19,19 +18,11 @@ func init() {
 }
 
 func runStatus(cmd *cobra.Command, args []string) error {
-	cfg, err := loadConfig()
+	db, cleanup, err := openDB()
 	if err != nil {
 		return err
 	}
-
-	db := sqlite.New(cfg.Storage.SQLite.Path)
-	if err := db.Open(); err != nil {
-		return fmt.Errorf("opening database: %w", err)
-	}
-	defer db.Close()
-	if err := db.Migrate(); err != nil {
-		return fmt.Errorf("migrating database: %w", err)
-	}
+	defer cleanup()
 
 	stats, err := db.Stats()
 	if err != nil {

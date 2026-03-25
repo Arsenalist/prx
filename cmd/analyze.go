@@ -36,22 +36,19 @@ func init() {
 }
 
 func runAnalyze(cmd *cobra.Command, args []string) error {
-	cfg, err := loadConfig()
+	db, cleanup, err := openDB()
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	settings, err := loadSettings(db)
 	if err != nil {
 		return err
 	}
 
-	db := sqlite.New(cfg.Storage.SQLite.Path)
-	if err := db.Open(); err != nil {
-		return fmt.Errorf("opening database: %w", err)
-	}
-	defer db.Close()
-	if err := db.Migrate(); err != nil {
-		return fmt.Errorf("migrating database: %w", err)
-	}
-
 	// Resolve date range
-	startDate, endDate := resolveDateRange(cmd, cfg)
+	startDate, endDate := resolveDateRange(cmd, settings)
 
 	// Resolve repos to analyze
 	repoFlags, _ := cmd.Flags().GetStringSlice("repo")
@@ -67,15 +64,18 @@ func runAnalyze(cmd *cobra.Command, args []string) error {
 		EndDate:   endStr,
 	}
 
-	// If --team specified, expand to repo names
+	// If --team specified, expand to repo names from DB
 	if len(teamFlags) > 0 {
-		teamRefs := resolveTeamRepos(cfg, teamFlags)
-		for _, ref := range teamRefs {
-			repoFlags = append(repoFlags, ref.repo)
+		teamRepos, err := resolveTeamReposFromDB(db, teamFlags)
+		if err != nil {
+			return err
+		}
+		for _, name := range teamRepos {
+			repoFlags = append(repoFlags, name)
 		}
 	}
 
-	repoNames, err := resolveRepoIDs(db, cfg, repoFlags, &filters)
+	repoNames, err := resolveRepoIDs(db, repoFlags, &filters)
 	if err != nil {
 		return err
 	}
@@ -97,12 +97,12 @@ func runAnalyze(cmd *cobra.Command, args []string) error {
 	})
 	result.Meta.Team = teamNameFromFlags(teamFlags)
 
-	if err := outputResult(cmd, cfg, result); err != nil {
+	if err := outputResult(cmd, settings, result); err != nil {
 		return err
 	}
 
 	// Run post-analyze hooks
-	if hookList, ok := cfg.Hooks["post-analyze"]; ok && len(hookList) > 0 {
+	if hookList, ok := settings.Hooks["post-analyze"]; ok && len(hookList) > 0 {
 		jsonData, _ := report.FormatJSON(result)
 		hooks.Run("post-analyze", hookList, []byte(jsonData), quiet)
 	}
@@ -110,8 +110,8 @@ func runAnalyze(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func outputResult(cmd *cobra.Command, cfg *config.Config, result *metrics.AnalysisResult) error {
-	outputFormat := cfg.Output.Format
+func outputResult(cmd *cobra.Command, s *config.Settings, result *metrics.AnalysisResult) error {
+	outputFormat := s.Output.Format
 	if format != "" {
 		outputFormat = format
 	}
@@ -128,7 +128,7 @@ func outputResult(cmd *cobra.Command, cfg *config.Config, result *metrics.Analys
 		fmt.Print(report.FormatTable(result))
 
 	case "markdown":
-		return writeMarkdown(cmd, cfg, result)
+		return writeMarkdown(cmd, s, result)
 
 	case "all":
 		// Table to stderr, JSON to stdout, markdown to file
@@ -138,7 +138,7 @@ func outputResult(cmd *cobra.Command, cfg *config.Config, result *metrics.Analys
 			return err
 		}
 		fmt.Println(output)
-		return writeMarkdown(cmd, cfg, result)
+		return writeMarkdown(cmd, s, result)
 
 	default:
 		fmt.Print(report.FormatTable(result))
@@ -147,8 +147,8 @@ func outputResult(cmd *cobra.Command, cfg *config.Config, result *metrics.Analys
 	return nil
 }
 
-func writeMarkdown(cmd *cobra.Command, cfg *config.Config, result *metrics.AnalysisResult) error {
-	outputDir := cfg.Output.Directory
+func writeMarkdown(cmd *cobra.Command, s *config.Settings, result *metrics.AnalysisResult) error {
+	outputDir := s.Output.Directory
 	if dir, _ := cmd.Flags().GetString("output"); dir != "" {
 		outputDir = dir
 	}
@@ -171,7 +171,7 @@ func writeMarkdown(cmd *cobra.Command, cfg *config.Config, result *metrics.Analy
 	return nil
 }
 
-func resolveRepoIDs(db *sqlite.SQLiteStore, cfg *config.Config, repoFlags []string, filters *store.PRFilters) ([]string, error) {
+func resolveRepoIDs(db *sqlite.SQLiteStore, repoFlags []string, filters *store.PRFilters) ([]string, error) {
 	repos, err := db.ListRepositories()
 	if err != nil {
 		return nil, err

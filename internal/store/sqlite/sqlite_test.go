@@ -405,3 +405,168 @@ func TestStoreStats(t *testing.T) {
 	assert.Equal(t, int64(1), stats.Tables["pull_requests"])
 	assert.Greater(t, stats.SizeBytes, int64(0))
 }
+
+func TestListAndDeleteInstances(t *testing.T) {
+	s := newTestDB(t)
+	s.UpsertInstance(store.InstanceRecord{Name: "github", Type: "github", BaseURL: "https://api.github.com", TokenEnv: "GH_TOKEN"})
+	s.UpsertInstance(store.InstanceRecord{Name: "enterprise", Type: "github", BaseURL: "https://ghe.corp.com/api/v3", TokenEnv: "GHE_TOKEN", TLSSkipVerify: true})
+
+	instances, err := s.ListInstances()
+	require.NoError(t, err)
+	assert.Len(t, instances, 2)
+	assert.Equal(t, "enterprise", instances[0].Name) // ordered by name
+	assert.Equal(t, "GHE_TOKEN", instances[0].TokenEnv)
+	assert.True(t, instances[0].TLSSkipVerify)
+	assert.Equal(t, "github", instances[1].Name)
+	assert.Equal(t, "GH_TOKEN", instances[1].TokenEnv)
+	assert.False(t, instances[1].TLSSkipVerify)
+
+	// Delete
+	require.NoError(t, s.DeleteInstance("enterprise"))
+	instances, _ = s.ListInstances()
+	assert.Len(t, instances, 1)
+
+	// Delete non-existent
+	assert.Error(t, s.DeleteInstance("nope"))
+}
+
+func TestDeleteRepository(t *testing.T) {
+	s := newTestDB(t)
+	instID, _ := s.UpsertInstance(store.InstanceRecord{Name: "gh", Type: "github", BaseURL: "https://api.github.com"})
+	s.UpsertRepository(store.RepositoryRecord{InstanceID: instID, Owner: "org", Name: "repo", FullName: "org/repo"})
+
+	repos, _ := s.ListRepositories()
+	assert.Len(t, repos, 1)
+
+	require.NoError(t, s.DeleteRepository(instID, "org/repo"))
+	repos, _ = s.ListRepositories()
+	assert.Len(t, repos, 0)
+
+	assert.Error(t, s.DeleteRepository(instID, "nope"))
+}
+
+func TestTeamCRUD(t *testing.T) {
+	s := newTestDB(t)
+	instID, _ := s.UpsertInstance(store.InstanceRecord{Name: "gh", Type: "github", BaseURL: "https://api.github.com"})
+	repoID1, _ := s.UpsertRepository(store.RepositoryRecord{InstanceID: instID, Owner: "org", Name: "api", FullName: "org/api"})
+	repoID2, _ := s.UpsertRepository(store.RepositoryRecord{InstanceID: instID, Owner: "org", Name: "web", FullName: "org/web"})
+
+	// Create team
+	teamID, err := s.UpsertTeam(store.TeamRecord{Name: "platform", DisplayName: "Platform Team"})
+	require.NoError(t, err)
+
+	// List teams
+	teams, err := s.ListTeams()
+	require.NoError(t, err)
+	assert.Len(t, teams, 1)
+	assert.Equal(t, "platform", teams[0].Name)
+	assert.Equal(t, "Platform Team", teams[0].DisplayName)
+
+	// Get by name
+	team, err := s.GetTeamByName("platform")
+	require.NoError(t, err)
+	assert.Equal(t, teamID, team.ID)
+
+	// Not found
+	team, err = s.GetTeamByName("nope")
+	require.NoError(t, err)
+	assert.Nil(t, team)
+
+	// Add repos
+	require.NoError(t, s.AddTeamRepo(teamID, repoID1))
+	require.NoError(t, s.AddTeamRepo(teamID, repoID2))
+	// Duplicate add is no-op
+	require.NoError(t, s.AddTeamRepo(teamID, repoID1))
+
+	repos, err := s.GetTeamRepos(teamID)
+	require.NoError(t, err)
+	assert.Len(t, repos, 2)
+
+	// Remove repo
+	require.NoError(t, s.RemoveTeamRepo(teamID, repoID1))
+	repos, _ = s.GetTeamRepos(teamID)
+	assert.Len(t, repos, 1)
+	assert.Equal(t, "org/web", repos[0].FullName)
+
+	// Remove non-existent
+	assert.Error(t, s.RemoveTeamRepo(teamID, repoID1))
+
+	// Delete team
+	require.NoError(t, s.DeleteTeam("platform"))
+	teams, _ = s.ListTeams()
+	assert.Len(t, teams, 0)
+
+	// Delete non-existent
+	assert.Error(t, s.DeleteTeam("nope"))
+}
+
+func TestSettingsCRUD(t *testing.T) {
+	s := newTestDB(t)
+
+	// Get missing key returns empty
+	val, err := s.GetSetting("fetch.per_page")
+	require.NoError(t, err)
+	assert.Equal(t, "", val)
+
+	// Set and get
+	require.NoError(t, s.SetSetting("fetch.per_page", "100"))
+	val, _ = s.GetSetting("fetch.per_page")
+	assert.Equal(t, "100", val)
+
+	// Update
+	require.NoError(t, s.SetSetting("fetch.per_page", "50"))
+	val, _ = s.GetSetting("fetch.per_page")
+	assert.Equal(t, "50", val)
+
+	// Set multiple
+	require.NoError(t, s.SetSetting("output.format", "json"))
+	require.NoError(t, s.SetSetting("date_range.preset", "last-30d"))
+
+	// List
+	settings, err := s.ListSettings()
+	require.NoError(t, err)
+	assert.Len(t, settings, 3)
+	assert.Equal(t, "50", settings["fetch.per_page"])
+	assert.Equal(t, "json", settings["output.format"])
+
+	// Delete
+	require.NoError(t, s.DeleteSetting("fetch.per_page"))
+	val, _ = s.GetSetting("fetch.per_page")
+	assert.Equal(t, "", val)
+
+	settings, _ = s.ListSettings()
+	assert.Len(t, settings, 2)
+}
+
+func TestMigrateV1ToV2(t *testing.T) {
+	// Create a V1-only database, then migrate to V2
+	path := filepath.Join(t.TempDir(), "migrate.db")
+	s := New(path)
+	require.NoError(t, s.Open())
+
+	// Apply only V1
+	_, err := s.db.Exec(schemaV1)
+	require.NoError(t, err)
+	_, err = s.db.Exec("INSERT INTO schema_version (version, applied_at) VALUES (1, '2026-01-01T00:00:00Z')")
+	require.NoError(t, err)
+
+	// Insert a V1 instance (without token_env/tls_skip_verify columns)
+	_, err = s.db.Exec("INSERT INTO instances (name, type, base_url) VALUES ('old', 'github', 'https://api.github.com')")
+	require.NoError(t, err)
+
+	// Now migrate — should add new columns
+	require.NoError(t, s.Migrate())
+
+	// Verify old instance got defaults for new columns
+	inst, err := s.GetInstanceByName("old")
+	require.NoError(t, err)
+	assert.Equal(t, "", inst.TokenEnv)
+	assert.False(t, inst.TLSSkipVerify)
+
+	// Verify settings table works
+	require.NoError(t, s.SetSetting("test.key", "test.value"))
+	val, _ := s.GetSetting("test.key")
+	assert.Equal(t, "test.value", val)
+
+	s.Close()
+}

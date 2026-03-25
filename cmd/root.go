@@ -2,8 +2,10 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/Arsenalist/prx/internal/config"
+	"github.com/Arsenalist/prx/internal/store/sqlite"
 	"github.com/spf13/cobra"
 )
 
@@ -26,7 +28,44 @@ func Execute() error {
 	return rootCmd.Execute()
 }
 
-// loadConfig resolves and loads the config file. Commands that need config should call this.
+// resolveDBPath returns the database path from: --db flag > $PRX_DB > default.
+func resolveDBPath() string {
+	if dbPath != "" {
+		return dbPath
+	}
+	if envDB := os.Getenv("PRX_DB"); envDB != "" {
+		return envDB
+	}
+	return config.DefaultDBPath()
+}
+
+// openDB opens and migrates the database. Returns the store and a cleanup function.
+func openDB() (*sqlite.SQLiteStore, func(), error) {
+	path := resolveDBPath()
+	db := sqlite.New(path)
+	if err := db.Open(); err != nil {
+		return nil, nil, fmt.Errorf("opening database: %w", err)
+	}
+	if err := db.Migrate(); err != nil {
+		db.Close()
+		return nil, nil, fmt.Errorf("migrating database: %w", err)
+	}
+	return db, func() { db.Close() }, nil
+}
+
+// loadSettings reads settings from DB and applies CLI overrides.
+func loadSettings(db config.SettingsReader) (*config.Settings, error) {
+	s, err := config.LoadSettings(db)
+	if err != nil {
+		return nil, err
+	}
+	if format != "" {
+		s.Output.Format = format
+	}
+	return s, nil
+}
+
+// loadConfig resolves and loads the config file. Used by `prx import` only.
 func loadConfig() (*config.Config, error) {
 	path, source, err := config.Resolve(cfgFile)
 	if err != nil {

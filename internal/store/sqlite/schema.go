@@ -1,5 +1,15 @@
 package sqlite
 
+const schemaV2 = `
+ALTER TABLE instances ADD COLUMN token_env TEXT NOT NULL DEFAULT '';
+ALTER TABLE instances ADD COLUMN tls_skip_verify INTEGER NOT NULL DEFAULT 0;
+
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+`
+
 const schemaV1 = `
 CREATE TABLE IF NOT EXISTS instances (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,

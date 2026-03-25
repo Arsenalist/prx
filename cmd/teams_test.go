@@ -1,57 +1,52 @@
 package cmd
 
 import (
+	"path/filepath"
 	"testing"
 
-	"github.com/Arsenalist/prx/internal/config"
+	"github.com/Arsenalist/prx/internal/store"
+	"github.com/Arsenalist/prx/internal/store/sqlite"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestResolveTeamRepos(t *testing.T) {
-	cfg := &config.Config{
-		Teams: map[string]config.Team{
-			"platform": {
-				DisplayName: "Platform Team",
-				Repos: []config.RepoRef{
-					{Instance: "github", Repo: "org/api"},
-					{Instance: "github", Repo: "org/web"},
-				},
-			},
-			"data": {
-				Repos: []config.RepoRef{
-					{Instance: "enterprise", Repo: "corp/data-pipeline"},
-				},
-			},
-		},
-	}
+func setupTestDB(t *testing.T) *sqlite.SQLiteStore {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "test.db")
+	db := sqlite.New(path)
+	require.NoError(t, db.Open())
+	require.NoError(t, db.Migrate())
+	t.Cleanup(func() { db.Close() })
+	return db
+}
+
+func TestResolveTeamReposFromDB(t *testing.T) {
+	db := setupTestDB(t)
+
+	// Setup: instance + repos + team
+	instID, err := db.UpsertInstance(store.InstanceRecord{Name: "github", Type: "github", BaseURL: "https://api.github.com", TokenEnv: "GH_TOKEN"})
+	require.NoError(t, err)
+
+	repo1ID, _ := db.UpsertRepository(store.RepositoryRecord{InstanceID: instID, Owner: "org", Name: "api", FullName: "org/api"})
+	repo2ID, _ := db.UpsertRepository(store.RepositoryRecord{InstanceID: instID, Owner: "org", Name: "web", FullName: "org/web"})
+
+	teamID, _ := db.UpsertTeam(store.TeamRecord{Name: "platform", DisplayName: "Platform Team"})
+	require.NoError(t, db.AddTeamRepo(teamID, repo1ID))
+	require.NoError(t, db.AddTeamRepo(teamID, repo2ID))
 
 	t.Run("single team", func(t *testing.T) {
-		refs := resolveTeamRepos(cfg, []string{"platform"})
-		assert.Len(t, refs, 2)
-		assert.Equal(t, "org/api", refs[0].repo)
-		assert.Equal(t, "org/web", refs[1].repo)
-	})
-
-	t.Run("multiple teams", func(t *testing.T) {
-		refs := resolveTeamRepos(cfg, []string{"platform", "data"})
-		assert.Len(t, refs, 3)
+		names, err := resolveTeamReposFromDB(db, []string{"platform"})
+		require.NoError(t, err)
+		assert.Len(t, names, 2)
+		assert.Contains(t, names, "org/api")
+		assert.Contains(t, names, "org/web")
 	})
 
 	t.Run("unknown team", func(t *testing.T) {
-		refs := resolveTeamRepos(cfg, []string{"nonexistent"})
-		assert.Len(t, refs, 0)
+		names, err := resolveTeamReposFromDB(db, []string{"nonexistent"})
+		require.NoError(t, err)
+		assert.Len(t, names, 0)
 	})
-}
-
-func TestCountInstances(t *testing.T) {
-	team := config.Team{
-		Repos: []config.RepoRef{
-			{Instance: "github", Repo: "org/a"},
-			{Instance: "github", Repo: "org/b"},
-			{Instance: "enterprise", Repo: "corp/c"},
-		},
-	}
-	assert.Equal(t, 2, countInstances(team))
 }
 
 func TestTeamNameFromFlags(t *testing.T) {

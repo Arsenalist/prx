@@ -32,31 +32,19 @@ Download from the [Releases](https://github.com/Arsenalist/prx/releases) page. B
 
 ## Quick Start
 
-### 1. Create a config file
+### 1. Initialize and configure
 
 ```bash
 prx init
 ```
 
-This creates a `prx.yaml` in the current directory. Edit it to add your GitHub token and repos:
-
-```yaml
-instances:
-  github:
-    type: github
-    base_url: https://api.github.com
-    token:
-      env: GITHUB_TOKEN
-
-repos:
-  - instance: github
-    repo: your-org/your-repo
-```
-
-Set your token:
+Then add a GitHub instance and some repos:
 
 ```bash
 export GITHUB_TOKEN=ghp_your_token_here
+
+prx instance add github --url https://api.github.com --token-env GITHUB_TOKEN
+prx repo add your-org/your-repo --instance github
 ```
 
 ### 2. Fetch PR data
@@ -75,109 +63,136 @@ That's it. You'll see a table with summary stats, developer metrics, and the slo
 
 ## Configuration
 
-prx uses a YAML config file. It looks for config in this order:
+All configuration is stored in a local SQLite database. No YAML files needed — manage everything via CLI commands.
 
-1. `--config` flag
-2. `./prx.yaml` in the current directory
-3. `$PRX_CONFIG` environment variable
-4. `~/.config/prx/config.yaml`
+The database location is resolved in this order:
+1. `--db` flag
+2. `$PRX_DB` environment variable
+3. `~/.config/prx/prx.db` (default)
 
-Generate a starter config:
+### Migrating from YAML
+
+If you have an existing `prx.yaml` config file, import it:
 
 ```bash
-prx init              # full config with comments
-prx init --minimal    # just the essentials
+prx import prx.yaml
 ```
 
-See [prx.example.yaml](prx.example.yaml) for a fully commented reference.
+This migrates instances, repos, teams, and settings into the database.
 
 ### GitHub instances
 
 prx supports multiple GitHub instances (e.g., github.com + GitHub Enterprise):
 
-```yaml
-instances:
-  github:
-    type: github
-    base_url: https://api.github.com
-    token:
-      env: GITHUB_TOKEN
-  enterprise:
-    type: github
-    base_url: https://github.example.com/api/v3
-    token:
-      env: GHE_TOKEN
+```bash
+# Add GitHub.com
+prx instance add github --url https://api.github.com --token-env GITHUB_TOKEN
+
+# Add GitHub Enterprise
+prx instance add enterprise --url https://github.example.com/api/v3 --token-env GHE_TOKEN --tls-skip-verify
+
+# List instances
+prx instance list
+
+# Remove an instance
+prx instance remove enterprise
+```
+
+### Repositories
+
+```bash
+# Add a repo to track
+prx repo add org/api --instance github
+prx repo add org/web --instance github
+
+# List tracked repos
+prx repo list
+
+# Remove a repo
+prx repo remove org/web
 ```
 
 ### Teams
 
 Group repos into teams for consolidated reporting:
 
-```yaml
-teams:
-  platform:
-    display_name: Platform Team
-    repos:
-      - instance: github
-        repo: org/api
-      - instance: enterprise
-        repo: corp/internal-service
+```bash
+# Create a team
+prx team create platform --display-name "Platform Engineering"
+
+# Add repos to the team
+prx team add-repo platform org/api
+prx team add-repo platform org/web
+
+# List teams
+prx team list
+
+# Show team details
+prx team show platform
+
+# Remove a repo from a team
+prx team remove-repo platform org/web
+
+# Delete a team
+prx team remove platform
 ```
 
-### Date ranges
+### Settings
 
-Set a default date range in config or override per-command:
+Global settings are stored in the database. Use `prx config` to manage them:
 
-```yaml
-date_range:
-  preset: last-30d
+```bash
+# View all settings
+prx config list
+
+# Set a value
+prx config set date_range.preset last-30d
+prx config set fetch.states '["closed","open"]'
+prx config set output.format json
+prx config set output.directory ./reports
+
+# Get a specific setting
+prx config get fetch.per_page
+
+# Reset to default
+prx config reset output.format
 ```
+
+Available settings:
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `fetch.states` | `["closed"]` | PR states to fetch |
+| `fetch.per_page` | `100` | PRs per API page |
+| `fetch.max_retries` | `3` | API retry count |
+| `fetch.rate_limit_buffer` | `100` | Warn when remaining requests drop below this |
+| `date_range.preset` | `last-30d` | Default date preset |
+| `date_range.start` | | Explicit start date (YYYY-MM-DD) |
+| `date_range.end` | | Explicit end date (YYYY-MM-DD) |
+| `output.format` | `table` | Default output format |
+| `output.directory` | `./reports` | Directory for markdown reports |
+| `output.timezone` | | Timezone for reports |
+| `test_patterns` | (Go/JS/Java defaults) | JSON array of regex patterns |
+| `hooks` | | JSON object of hook definitions |
+
+### Date range presets
 
 Available presets: `last-7d`, `last-14d`, `last-30d`, `last-90d`, `this-week`, `last-week`, `this-month`, `last-month`, `this-quarter`.
 
-Or use explicit dates:
-
-```yaml
-date_range:
-  start: "2026-01-01"
-  end: "2026-03-31"
-```
-
 ### Test file patterns
 
-prx classifies LOC as test vs production using regex patterns:
+prx classifies LOC as test vs production using regex patterns. The defaults cover Go, JavaScript/TypeScript, and Java conventions. Customize with:
 
-```yaml
-test_patterns:
-  - "_test\\.go$"
-  - "\\.test\\.(ts|js|tsx|jsx)$"
-  - "\\.spec\\.(ts|js|tsx|jsx)$"
-  - "/__tests__/"
+```bash
+prx config set test_patterns '["_test\\.go$", "\\.test\\.(ts|js)$", "/__tests__/"]'
 ```
 
 ### Hooks
 
 Run commands after events. The analysis result JSON is piped to stdin:
 
-```yaml
-hooks:
-  post-analyze:
-    - name: slack-notify
-      command: "curl -X POST $SLACK_WEBHOOK -d @-"
-      timeout: 10
-    - name: word-count
-      command: "wc -c"
-```
-
-### Storage
-
-prx stores data in SQLite by default:
-
-```yaml
-storage:
-  provider: sqlite
-  sqlite:
-    path: ./prx.db
+```bash
+prx config set hooks '{"post-analyze": [{"name": "slack", "command": "curl -X POST $SLACK_WEBHOOK -d @-", "timeout": 10}]}'
 ```
 
 ## Usage
@@ -189,14 +204,13 @@ Every command supports `--help`:
 ```bash
 prx --help              # list all commands and global flags
 prx fetch --help        # help for a specific command
-prx db --help           # help for subcommand groups
+prx team --help         # help for subcommand groups
 ```
 
 ### Global flags
 
 | Flag | Description |
 |------|-------------|
-| `--config` | Path to config file |
 | `--db` | Override database path |
 | `--format` | Output format: `table` (default), `json`, `markdown`, `all` |
 | `--quiet` | Suppress non-essential output |
@@ -205,11 +219,12 @@ prx db --help           # help for subcommand groups
 ### Fetching data
 
 ```bash
-prx fetch                          # fetch all repos in config
+prx fetch                          # fetch all repos
 prx fetch --repo org/repo          # fetch a specific repo
 prx fetch --team platform          # fetch all repos in a team
 prx fetch --full                   # re-fetch everything (ignore cache)
 prx fetch --dry-run                # show what would be fetched
+prx fetch --verbose                # detailed per-PR progress
 ```
 
 prx uses smart sync: closed/merged PRs already in the database are skipped, only open PRs are re-fetched.
@@ -240,13 +255,6 @@ prx report --fetch-only            # fetch only (same as prx fetch)
 ```bash
 prx summarize --preset last-30d    # JSON to stdout, pipe-friendly
 prx summarize | jq '.summary.total_prs'
-```
-
-### Teams
-
-```bash
-prx teams                          # list all teams
-prx teams show platform            # show repos in a team
 ```
 
 ### Exporting data
