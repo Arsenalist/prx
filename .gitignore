@@ -1,0 +1,14 @@
+# Binary
+prx
+dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+
+# Database (local)
+*.db
