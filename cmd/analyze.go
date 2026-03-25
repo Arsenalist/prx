@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Arsenalist/prx/internal/config"
+	"github.com/Arsenalist/prx/internal/hooks"
 	"github.com/Arsenalist/prx/internal/metrics"
 	"github.com/Arsenalist/prx/internal/report"
 	"github.com/Arsenalist/prx/internal/store"
@@ -96,7 +97,17 @@ func runAnalyze(cmd *cobra.Command, args []string) error {
 	})
 	result.Meta.Team = teamNameFromFlags(teamFlags)
 
-	return outputResult(cmd, cfg, result)
+	if err := outputResult(cmd, cfg, result); err != nil {
+		return err
+	}
+
+	// Run post-analyze hooks
+	if hookList, ok := cfg.Hooks["post-analyze"]; ok && len(hookList) > 0 {
+		jsonData, _ := report.FormatJSON(result)
+		hooks.Run("post-analyze", hookList, []byte(jsonData), quiet)
+	}
+
+	return nil
 }
 
 func outputResult(cmd *cobra.Command, cfg *config.Config, result *metrics.AnalysisResult) error {

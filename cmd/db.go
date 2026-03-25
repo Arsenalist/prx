@@ -1,8 +1,12 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"strconv"
 
+	"github.com/Arsenalist/prx/internal/store/sqlite"
 	"github.com/spf13/cobra"
 )
 
@@ -15,38 +19,26 @@ var dbQueryCmd = &cobra.Command{
 	Use:   "query [sql]",
 	Short: "Run a read-only SQL query against the database",
 	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Printf("db query: not implemented yet (sql: %s)\n", args[0])
-		return nil
-	},
+	RunE:  runDBQuery,
 }
 
 var dbPathCmd = &cobra.Command{
 	Use:   "path",
 	Short: "Print the database file path",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("db path: not implemented yet")
-		return nil
-	},
+	RunE:  runDBPath,
 }
 
 var dbStatsCmd = &cobra.Command{
 	Use:   "stats",
 	Short: "Show database size and table row counts",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("db stats: not implemented yet")
-		return nil
-	},
+	RunE:  runDBStats,
 }
 
 var dbRawCmd = &cobra.Command{
 	Use:   "raw [repo] [pr-number]",
 	Short: "Dump raw JSON blob for a specific PR",
 	Args:  cobra.ExactArgs(2),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Printf("db raw: not implemented yet (repo: %s, pr: %s)\n", args[0], args[1])
-		return nil
-	},
+	RunE:  runDBRaw,
 }
 
 func init() {
@@ -55,4 +47,129 @@ func init() {
 	dbCmd.AddCommand(dbStatsCmd)
 	dbCmd.AddCommand(dbRawCmd)
 	rootCmd.AddCommand(dbCmd)
+}
+
+func runDBPath(cmd *cobra.Command, args []string) error {
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	fmt.Println(cfg.Storage.SQLite.Path)
+	return nil
+}
+
+func runDBStats(cmd *cobra.Command, args []string) error {
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
+	}
+
+	db := sqlite.New(cfg.Storage.SQLite.Path)
+	if err := db.Open(); err != nil {
+		return fmt.Errorf("opening database: %w", err)
+	}
+	defer db.Close()
+
+	info, err := os.Stat(cfg.Storage.SQLite.Path)
+	if err == nil {
+		fmt.Printf("Database: %s (%.1f MB)\n", cfg.Storage.SQLite.Path, float64(info.Size())/(1024*1024))
+	}
+
+	stats, err := db.Stats()
+	if err != nil {
+		return err
+	}
+	for table, count := range stats.Tables {
+		fmt.Printf("  %-20s %d rows\n", table, count)
+	}
+	return nil
+}
+
+func runDBQuery(cmd *cobra.Command, args []string) error {
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
+	}
+
+	db := sqlite.New(cfg.Storage.SQLite.Path)
+	if err := db.Open(); err != nil {
+		return fmt.Errorf("opening database: %w", err)
+	}
+	defer db.Close()
+
+	rows, err := db.RawQuery(args[0])
+	if err != nil {
+		return err
+	}
+
+	data, err := json.MarshalIndent(rows, "", "  ")
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(data))
+	return nil
+}
+
+func runDBRaw(cmd *cobra.Command, args []string) error {
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
+	}
+
+	db := sqlite.New(cfg.Storage.SQLite.Path)
+	if err := db.Open(); err != nil {
+		return fmt.Errorf("opening database: %w", err)
+	}
+	defer db.Close()
+
+	repoName := args[0]
+	prNumber, err := strconv.Atoi(args[1])
+	if err != nil {
+		return fmt.Errorf("invalid PR number: %s", args[1])
+	}
+
+	// Find repo
+	repos, err := db.ListRepositories()
+	if err != nil {
+		return err
+	}
+
+	var repoID int64
+	for _, r := range repos {
+		if r.FullName == repoName {
+			repoID = r.ID
+			break
+		}
+	}
+	if repoID == 0 {
+		return fmt.Errorf("repo %q not found in database", repoName)
+	}
+
+	// Query raw data
+	rows, err := db.RawQuery(
+		fmt.Sprintf("SELECT raw_data FROM pull_requests WHERE repo_id = %d AND number = %d", repoID, prNumber),
+	)
+	if err != nil {
+		return err
+	}
+	if len(rows) == 0 {
+		return fmt.Errorf("PR #%d not found in %s", prNumber, repoName)
+	}
+
+	rawData, ok := rows[0]["raw_data"]
+	if !ok || rawData == nil {
+		fmt.Println("{}")
+		return nil
+	}
+
+	// Pretty-print if it's valid JSON
+	var parsed interface{}
+	raw := fmt.Sprintf("%v", rawData)
+	if err := json.Unmarshal([]byte(raw), &parsed); err == nil {
+		pretty, _ := json.MarshalIndent(parsed, "", "  ")
+		fmt.Println(string(pretty))
+	} else {
+		fmt.Println(raw)
+	}
+	return nil
 }
