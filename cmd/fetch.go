@@ -65,7 +65,18 @@ func runFetch(cmd *cobra.Command, args []string) error {
 
 	testPatterns := sync.CompileTestPatterns(cfg.TestPatterns)
 
-	for _, ref := range repos {
+	if !quiet {
+		mode := "incremental"
+		if full {
+			mode = "full"
+		}
+		if dryRun {
+			mode = "dry-run"
+		}
+		fmt.Fprintf(os.Stderr, "Fetching %d repo(s) [%s]\n", len(repos), mode)
+	}
+
+	for i, ref := range repos {
 		inst, ok := cfg.Instances[ref.instance]
 		if !ok {
 			fmt.Fprintf(os.Stderr, "Warning: instance %q not found, skipping %s\n", ref.instance, ref.repo)
@@ -100,9 +111,18 @@ func runFetch(cmd *cobra.Command, args []string) error {
 		// Check rate limit
 		if !quiet {
 			rl, err := client.GetRateLimit()
-			if err == nil && rl.Remaining < cfg.Fetch.RateLimitBuffer {
-				fmt.Fprintf(os.Stderr, "Warning: only %d API requests remaining (resets at %s)\n", rl.Remaining, rl.ResetAt)
+			if err == nil {
+				if verbose {
+					fmt.Fprintf(os.Stderr, "  API rate limit: %d/%d remaining (resets %s)\n", rl.Remaining, rl.Limit, rl.ResetAt)
+				}
+				if rl.Remaining < cfg.Fetch.RateLimitBuffer {
+					fmt.Fprintf(os.Stderr, "  Warning: only %d API requests remaining (resets at %s)\n", rl.Remaining, rl.ResetAt)
+				}
 			}
+		}
+
+		if !quiet {
+			fmt.Fprintf(os.Stderr, "\n(%d/%d) %s\n", i+1, len(repos), ref.repo)
 		}
 
 		// Run sync
@@ -123,14 +143,34 @@ func runFetch(cmd *cobra.Command, args []string) error {
 
 		result, err := engine.SyncRepo(instID, repoID, parts[0], parts[1], opts)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error fetching %s: %v\n", ref.repo, err)
+			fmt.Fprintf(os.Stderr, "  Error: %v\n", err)
 			continue
 		}
 
 		if !quiet {
-			fmt.Fprintf(os.Stderr, "  %s: %d new, %d updated, %d skipped (%s)\n",
-				ref.repo, result.New, result.Updated, result.Skipped, result.Duration.Round(time.Millisecond))
+			parts := []string{}
+			if result.New > 0 {
+				parts = append(parts, fmt.Sprintf("%d new", result.New))
+			}
+			if result.Updated > 0 {
+				parts = append(parts, fmt.Sprintf("%d updated", result.Updated))
+			}
+			if result.Skipped > 0 {
+				parts = append(parts, fmt.Sprintf("%d skipped", result.Skipped))
+			}
+			if result.Errors > 0 {
+				parts = append(parts, fmt.Sprintf("%d errors", result.Errors))
+			}
+			summary := strings.Join(parts, ", ")
+			if summary == "" {
+				summary = "nothing to do"
+			}
+			fmt.Fprintf(os.Stderr, "  Done: %s (%s)\n", summary, result.Duration.Round(time.Millisecond))
 		}
+	}
+
+	if !quiet {
+		fmt.Fprintln(os.Stderr)
 	}
 
 	return nil

@@ -61,6 +61,11 @@ func (e *Engine) SyncRepo(instanceID, repoID int64, owner, repo string, opts Opt
 		}
 		if meta != nil {
 			since = meta.LastUpdatedAt
+			if opts.Verbose {
+				log("  Last fetch: %s (%d PRs)", meta.LastFetchAt, meta.PRCount)
+			}
+		} else if opts.Verbose {
+			log("  First fetch for this repo")
 		}
 	}
 
@@ -74,7 +79,12 @@ func (e *Engine) SyncRepo(instanceID, repoID int64, owner, repo string, opts Opt
 		}
 	}
 
-	log("Fetching PR list for %s/%s (since: %s)...", owner, repo, since)
+	if since != "" {
+		log("  Fetching PRs updated since %s...", since[:min(10, len(since))])
+	} else {
+		log("  Fetching all PRs...")
+	}
+
 	prs, err := e.provider.ListPullRequests(owner, repo, provider.ListPROptions{
 		State:   state,
 		PerPage: opts.PerPage,
@@ -84,28 +94,40 @@ func (e *Engine) SyncRepo(instanceID, repoID int64, owner, repo string, opts Opt
 		return nil, fmt.Errorf("listing PRs: %w", err)
 	}
 
+	total := len(prs)
+	log("  Found %d PRs to process", total)
+
 	var maxUpdatedAt string
 
-	for _, pr := range prs {
+	for i, pr := range prs {
 		if pr.UpdatedAt > maxUpdatedAt {
 			maxUpdatedAt = pr.UpdatedAt
 		}
 
 		action := e.decideAction(repoID, pr, opts.Full)
+		pos := fmt.Sprintf("[%d/%d]", i+1, total)
 
 		switch action {
 		case actionSkip:
 			result.Skipped++
+			if opts.Verbose {
+				log("  %s #%d %s — skipped (already stored)", pos, pr.Number, truncate(pr.Title, 40))
+			}
 			continue
 
 		case actionFetchFull:
 			if opts.DryRun {
-				log("  [dry-run] Would full-fetch PR #%d (%s)", pr.Number, pr.State)
+				log("  %s #%d %s — would fetch (new)", pos, pr.Number, truncate(pr.Title, 40))
 				result.New++
 				continue
 			}
+			if opts.Verbose {
+				log("  %s #%d %s — fetching...", pos, pr.Number, truncate(pr.Title, 40))
+			} else if total > 5 && (i+1)%10 == 0 {
+				log("  %s processing...", pos)
+			}
 			if err := e.fetchAndStoreFull(repoID, owner, repo, pr, opts); err != nil {
-				log("  Error fetching PR #%d: %v", pr.Number, err)
+				log("  %s #%d — error: %v", pos, pr.Number, err)
 				result.Errors++
 				continue
 			}
@@ -113,12 +135,17 @@ func (e *Engine) SyncRepo(instanceID, repoID int64, owner, repo string, opts Opt
 
 		case actionRefetch:
 			if opts.DryRun {
-				log("  [dry-run] Would re-fetch PR #%d (%s)", pr.Number, pr.State)
+				log("  %s #%d %s — would re-fetch (updated)", pos, pr.Number, truncate(pr.Title, 40))
 				result.Updated++
 				continue
 			}
+			if opts.Verbose {
+				log("  %s #%d %s — re-fetching (state changed)...", pos, pr.Number, truncate(pr.Title, 40))
+			} else if total > 5 && (i+1)%10 == 0 {
+				log("  %s processing...", pos)
+			}
 			if err := e.fetchAndStoreFull(repoID, owner, repo, pr, opts); err != nil {
-				log("  Error re-fetching PR #%d: %v", pr.Number, err)
+				log("  %s #%d — error: %v", pos, pr.Number, err)
 				result.Errors++
 				continue
 			}
@@ -184,6 +211,9 @@ func (e *Engine) fetchAndStoreFull(repoID int64, owner, repo string, listPR prov
 	}
 
 	// Get full PR details (list endpoint doesn't include additions/deletions)
+	if opts.Verbose {
+		log("    → fetching PR details")
+	}
 	fullPR, err := e.provider.GetPullRequest(owner, repo, listPR.Number)
 	if err != nil {
 		return fmt.Errorf("getting PR #%d details: %w", listPR.Number, err)
@@ -197,9 +227,14 @@ func (e *Engine) fetchAndStoreFull(repoID int64, owner, repo string, listPR prov
 
 	// Fetch branch comparison (using SHAs, works even if branch is deleted)
 	if fullPR.BaseSHA != "" && fullPR.HeadSHA != "" {
+		if opts.Verbose {
+			log("    → fetching file changes")
+		}
 		comp, err := e.provider.GetBranchComparison(owner, repo, fullPR.BaseSHA, fullPR.HeadSHA)
 		if err != nil {
-			log("  Warning: could not get branch comparison for PR #%d: %v", listPR.Number, err)
+			if opts.Verbose {
+				log("    → warning: could not get file changes: %v", err)
+			}
 		} else {
 			rawJSON := comp.RawJSON
 			e.store.UpsertBranchInfo(store.BranchInfoRecord{
@@ -223,13 +258,21 @@ func (e *Engine) fetchAndStoreFull(repoID int64, owner, repo string, listPR prov
 				})
 			}
 			e.store.ReplaceFileChanges(prID, files)
+			if opts.Verbose {
+				log("    → stored %d file changes (%d+/%d-)", len(files), comp.TotalAdditions, comp.TotalDeletions)
+			}
 		}
 	}
 
 	// Fetch timeline events
+	if opts.Verbose {
+		log("    → fetching timeline events")
+	}
 	events, err := e.provider.GetTimelineEvents(owner, repo, listPR.Number)
 	if err != nil {
-		log("  Warning: could not get timeline for PR #%d: %v", listPR.Number, err)
+		if opts.Verbose {
+			log("    → warning: could not get timeline: %v", err)
+		}
 	} else {
 		var records []store.TimelineEventRecord
 		for _, evt := range events {
@@ -243,6 +286,9 @@ func (e *Engine) fetchAndStoreFull(repoID int64, owner, repo string, listPR prov
 			})
 		}
 		e.store.ReplaceTimelineEvents(prID, records)
+		if opts.Verbose {
+			log("    → stored %d timeline events", len(records))
+		}
 
 		// Extract ready_for_review_at and update PR
 		for _, evt := range events {
@@ -308,4 +354,11 @@ func CompileTestPatterns(patterns []string) []*regexp.Regexp {
 		}
 	}
 	return compiled
+}
+
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max-3] + "..."
 }
