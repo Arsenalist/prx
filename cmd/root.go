@@ -1,6 +1,9 @@
 package cmd
 
 import (
+	"fmt"
+
+	"github.com/Arsenalist/prx/internal/config"
 	"github.com/spf13/cobra"
 )
 
@@ -18,8 +21,36 @@ var rootCmd = &cobra.Command{
 	Long:  `prx fetches pull request data from GitHub (including Enterprise), stores it locally, and generates developer productivity metrics, team reports, and agent-consumable structured output.`,
 }
 
+// Execute runs the root command.
 func Execute() error {
 	return rootCmd.Execute()
+}
+
+// loadConfig resolves and loads the config file. Commands that need config should call this.
+func loadConfig() (*config.Config, error) {
+	path, source, err := config.Resolve(cfgFile)
+	if err != nil {
+		return nil, err
+	}
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		return nil, err
+	}
+
+	if verbose {
+		fmt.Printf("Config loaded from %s (%s)\n", path, source)
+	}
+
+	// CLI overrides
+	if dbPath != "" {
+		cfg.Storage.SQLite.Path = dbPath
+	}
+	if format != "" {
+		cfg.Output.Format = format
+	}
+
+	return cfg, nil
 }
 
 func init() {
