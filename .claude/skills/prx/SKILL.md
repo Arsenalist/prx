@@ -45,7 +45,33 @@ prx instance add github --url https://api.github.com --token-env GITHUB_TOKEN
 # GitHub Enterprise
 prx instance add ghe --url https://ghe.company.com/api/v3 --token-env GHE_TOKEN --tls-skip-verify
 ```
-The `--token-env` flag specifies the **environment variable name** (not the token itself) that holds the API token.
+The `--token-env` flag specifies the **environment variable name** (not the token itself) that holds the API token. You must set that environment variable before running `prx fetch`:
+
+```bash
+# macOS / Linux
+export GITHUB_TOKEN=ghp_your_personal_access_token_here
+
+# To persist across sessions, add to ~/.bashrc, ~/.zshrc, or ~/.profile:
+echo 'export GITHUB_TOKEN=ghp_your_token' >> ~/.zshrc
+```
+
+```powershell
+# Windows (PowerShell)
+$env:GITHUB_TOKEN = "ghp_your_personal_access_token_here"
+
+# To persist across sessions:
+[System.Environment]::SetEnvironmentVariable("GITHUB_TOKEN", "ghp_your_token", "User")
+```
+
+```cmd
+# Windows (Command Prompt)
+set GITHUB_TOKEN=ghp_your_personal_access_token_here
+
+# To persist across sessions:
+setx GITHUB_TOKEN "ghp_your_token"
+```
+
+The token needs `repo` scope (for private repos) or just `public_repo` scope (for public repos only). Create one at GitHub > Settings > Developer settings > Personal access tokens.
 
 ### 3. Add repositories to track
 ```bash
