@@ -30,6 +30,35 @@ func FormatTable(result *metrics.AnalysisResult) string {
 	}
 	writeSimpleTable(&sb, summaryRows)
 
+	// Review Metrics
+	if result.Summary.Review.AvgTimeToFirstReviewHours > 0 || result.Summary.Review.AvgReviewCycles > 0 || result.Summary.Review.AvgCommentsPerPR > 0 {
+		sb.WriteString("\n=== Review Metrics ===\n\n")
+		reviewRows := [][]string{
+			{"Avg Time to First Review", FormatDuration(result.Summary.Review.AvgTimeToFirstReviewHours)},
+			{"Median Time to First Review", FormatDuration(result.Summary.Review.MedianTimeToFirstReviewHours)},
+			{"Avg Review Cycles", fmt.Sprintf("%.1f", result.Summary.Review.AvgReviewCycles)},
+			{"Avg Comments/PR", fmt.Sprintf("%.1f", result.Summary.Review.AvgCommentsPerPR)},
+		}
+		writeSimpleTable(&sb, reviewRows)
+	}
+
+	// Reviewer Stats
+	if len(result.ReviewerStats) > 0 {
+		sb.WriteString("\n=== Reviewer Stats ===\n\n")
+		header := []string{"Reviewer", "Reviews", "Approvals", "Changes Req", "Avg Turnaround"}
+		var rows [][]string
+		for _, rs := range result.ReviewerStats {
+			rows = append(rows, []string{
+				rs.Login,
+				fmt.Sprintf("%d", rs.ReviewsGiven),
+				fmt.Sprintf("%d", rs.Approvals),
+				fmt.Sprintf("%d", rs.ChangesRequested),
+				FormatDuration(rs.AvgReviewTurnaroundHours),
+			})
+		}
+		writeAlignedTable(&sb, header, rows)
+	}
+
 	// Developer metrics
 	if len(result.Developers) > 0 {
 		sb.WriteString("\n=== Developer Metrics ===\n\n")

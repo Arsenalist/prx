@@ -1,5 +1,13 @@
 package sqlite
 
+const schemaV3 = `
+ALTER TABLE pull_requests ADD COLUMN merged_by TEXT;
+ALTER TABLE pull_requests ADD COLUMN comment_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE pull_requests ADD COLUMN review_comment_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE timeline_events ADD COLUMN review_state TEXT;
+CREATE INDEX IF NOT EXISTS idx_timeline_event_type ON timeline_events(pr_id, event_type);
+`
+
 const schemaV2 = `
 ALTER TABLE instances ADD COLUMN token_env TEXT NOT NULL DEFAULT '';
 ALTER TABLE instances ADD COLUMN tls_skip_verify INTEGER NOT NULL DEFAULT 0;

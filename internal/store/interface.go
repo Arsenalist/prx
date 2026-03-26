@@ -86,26 +86,29 @@ type TeamRecord struct {
 
 // PullRequestRecord represents a row in the pull_requests table.
 type PullRequestRecord struct {
-	ID               int64   `json:"id"`
-	RepoID           int64   `json:"repo_id"`
-	Number           int     `json:"number"`
-	Title            string  `json:"title"`
-	State            string  `json:"state"`
-	Author           string  `json:"author"`
-	URL              string  `json:"url"`
-	CreatedAt        string  `json:"created_at"`
-	UpdatedAt        string  `json:"updated_at"`
-	MergedAt         *string `json:"merged_at"`
-	ClosedAt         *string `json:"closed_at"`
-	IsDraft          bool    `json:"is_draft"`
-	ReadyForReviewAt *string `json:"ready_for_review_at"`
-	Additions        int     `json:"additions"`
-	Deletions        int     `json:"deletions"`
-	ChangedFiles     int     `json:"changed_files"`
-	BaseBranch       *string `json:"base_branch"`
-	HeadBranch       *string `json:"head_branch"`
-	Body             *string `json:"body"`
-	RawData          *string `json:"raw_data"`
+	ID                 int64   `json:"id"`
+	RepoID             int64   `json:"repo_id"`
+	Number             int     `json:"number"`
+	Title              string  `json:"title"`
+	State              string  `json:"state"`
+	Author             string  `json:"author"`
+	URL                string  `json:"url"`
+	CreatedAt          string  `json:"created_at"`
+	UpdatedAt          string  `json:"updated_at"`
+	MergedAt           *string `json:"merged_at"`
+	ClosedAt           *string `json:"closed_at"`
+	IsDraft            bool    `json:"is_draft"`
+	ReadyForReviewAt   *string `json:"ready_for_review_at"`
+	Additions          int     `json:"additions"`
+	Deletions          int     `json:"deletions"`
+	ChangedFiles       int     `json:"changed_files"`
+	BaseBranch         *string `json:"base_branch"`
+	HeadBranch         *string `json:"head_branch"`
+	Body               *string `json:"body"`
+	RawData            *string `json:"raw_data"`
+	MergedBy           *string `json:"merged_by"`
+	CommentCount       int     `json:"comment_count"`
+	ReviewCommentCount int     `json:"review_comment_count"`
 }
 
 // BranchInfoRecord represents a row in the branch_info table.
@@ -131,12 +134,13 @@ type FileChangeRecord struct {
 
 // TimelineEventRecord represents a row in the timeline_events table.
 type TimelineEventRecord struct {
-	ID        int64   `json:"id"`
-	PRID      int64   `json:"pr_id"`
-	EventType string  `json:"event_type"`
-	CreatedAt *string `json:"created_at"`
-	Actor     *string `json:"actor"`
-	RawData   string  `json:"raw_data"`
+	ID          int64   `json:"id"`
+	PRID        int64   `json:"pr_id"`
+	EventType   string  `json:"event_type"`
+	CreatedAt   *string `json:"created_at"`
+	Actor       *string `json:"actor"`
+	RawData     string  `json:"raw_data"`
+	ReviewState *string `json:"review_state"`
 }
 
 // FetchMetadataRecord represents a row in the fetch_metadata table.

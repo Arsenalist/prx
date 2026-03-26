@@ -42,8 +42,10 @@ func Calculate(prs []store.PullRequestRecord, db FileChangeReader, opts Calculat
 	}
 
 	result.Summary = calculateSummary(prs, db)
+	result.Summary.Review = calculateReviewSummary(prs, db)
 	result.Developers = calculateDeveloperStats(prs, db, opts)
 	result.SlowestPRs = calculateSlowestPRs(prs, db)
+	result.ReviewerStats = calculateReviewerStats(prs, db)
 
 	return result
 }
@@ -372,6 +374,191 @@ func calculateSlowestPRs(prs []store.PullRequestRecord, db FileChangeReader) []P
 	}
 
 	return timings
+}
+
+// --- Review metrics ---
+
+type reviewEvent struct {
+	prID        int64
+	actor       string
+	reviewState string
+	createdAt   string
+}
+
+func getReviewEvents(db FileChangeReader, prs []store.PullRequestRecord) map[int64][]reviewEvent {
+	result := make(map[int64][]reviewEvent)
+	if db == nil {
+		return result
+	}
+
+	ids := make(map[int64]bool)
+	for _, pr := range prs {
+		if pr.ID > 0 {
+			ids[pr.ID] = true
+		}
+	}
+	if len(ids) == 0 {
+		return result
+	}
+
+	rows, err := db.RawQuery("SELECT pr_id, actor, review_state, created_at FROM timeline_events WHERE event_type = 'reviewed' AND review_state IS NOT NULL ORDER BY created_at")
+	if err != nil {
+		return result
+	}
+
+	for _, row := range rows {
+		prID, ok := row["pr_id"].(int64)
+		if !ok || !ids[prID] {
+			continue
+		}
+		evt := reviewEvent{prID: prID}
+		if v, ok := row["actor"].(string); ok {
+			evt.actor = v
+		}
+		if v, ok := row["review_state"].(string); ok {
+			evt.reviewState = v
+		}
+		if v, ok := row["created_at"].(string); ok {
+			evt.createdAt = v
+		}
+		result[prID] = append(result[prID], evt)
+	}
+	return result
+}
+
+func calculateReviewSummary(prs []store.PullRequestRecord, db FileChangeReader) ReviewMetrics {
+	reviewEvents := getReviewEvents(db, prs)
+
+	var timeToFirstReview []float64
+	var reviewCycles []float64
+	var commentsPerPR []float64
+
+	for _, pr := range prs {
+		if pr.State != "merged" {
+			continue
+		}
+
+		// Review cycles: count changes_requested events
+		events := reviewEvents[pr.ID]
+		cycles := 0
+		for _, evt := range events {
+			if evt.reviewState == "changes_requested" {
+				cycles++
+			}
+		}
+		reviewCycles = append(reviewCycles, float64(cycles))
+
+		// Time to first review: earliest non-author reviewed event after ready time
+		reviewStart := parseTime(pr.CreatedAt)
+		if pr.ReadyForReviewAt != nil {
+			if t := parseTime(*pr.ReadyForReviewAt); !t.IsZero() {
+				reviewStart = t
+			}
+		}
+
+		for _, evt := range events {
+			if evt.actor != pr.Author && evt.createdAt != "" {
+				reviewedAt := parseTime(evt.createdAt)
+				if !reviewedAt.IsZero() && !reviewStart.IsZero() {
+					timeToFirstReview = append(timeToFirstReview, hours(reviewedAt.Sub(reviewStart)))
+				}
+				break // first non-author review only
+			}
+		}
+
+		// Comments per PR
+		totalComments := pr.CommentCount + pr.ReviewCommentCount
+		if totalComments > 0 || pr.CommentCount > 0 || pr.ReviewCommentCount > 0 {
+			commentsPerPR = append(commentsPerPR, float64(totalComments))
+		}
+	}
+
+	return ReviewMetrics{
+		AvgTimeToFirstReviewHours:    avg(timeToFirstReview),
+		MedianTimeToFirstReviewHours: median(timeToFirstReview),
+		AvgReviewCycles:              avg(reviewCycles),
+		AvgCommentsPerPR:             avg(commentsPerPR),
+	}
+}
+
+func calculateReviewerStats(prs []store.PullRequestRecord, db FileChangeReader) []ReviewerStats {
+	reviewEvents := getReviewEvents(db, prs)
+
+	// Build PR lookup for review start time
+	prMap := make(map[int64]store.PullRequestRecord)
+	for _, pr := range prs {
+		prMap[pr.ID] = pr
+	}
+
+	type reviewerAgg struct {
+		reviewsGiven     int
+		approvals        int
+		changesRequested int
+		turnarounds      []float64
+	}
+	byReviewer := make(map[string]*reviewerAgg)
+
+	for prID, events := range reviewEvents {
+		pr, ok := prMap[prID]
+		if !ok {
+			continue
+		}
+
+		reviewStart := parseTime(pr.CreatedAt)
+		if pr.ReadyForReviewAt != nil {
+			if t := parseTime(*pr.ReadyForReviewAt); !t.IsZero() {
+				reviewStart = t
+			}
+		}
+
+		// Track first review per reviewer per PR for turnaround
+		firstReviewByReviewer := make(map[string]bool)
+
+		for _, evt := range events {
+			if evt.actor == "" || evt.actor == pr.Author {
+				continue
+			}
+			agg, ok := byReviewer[evt.actor]
+			if !ok {
+				agg = &reviewerAgg{}
+				byReviewer[evt.actor] = agg
+			}
+			agg.reviewsGiven++
+			switch evt.reviewState {
+			case "approved":
+				agg.approvals++
+			case "changes_requested":
+				agg.changesRequested++
+			}
+
+			if !firstReviewByReviewer[evt.actor] {
+				firstReviewByReviewer[evt.actor] = true
+				if evt.createdAt != "" && !reviewStart.IsZero() {
+					reviewedAt := parseTime(evt.createdAt)
+					if !reviewedAt.IsZero() {
+						agg.turnarounds = append(agg.turnarounds, hours(reviewedAt.Sub(reviewStart)))
+					}
+				}
+			}
+		}
+	}
+
+	var stats []ReviewerStats
+	for login, agg := range byReviewer {
+		stats = append(stats, ReviewerStats{
+			Login:                    login,
+			ReviewsGiven:             agg.reviewsGiven,
+			Approvals:                agg.approvals,
+			ChangesRequested:         agg.changesRequested,
+			AvgReviewTurnaroundHours: avg(agg.turnarounds),
+		})
+	}
+
+	sort.Slice(stats, func(i, j int) bool {
+		return stats[i].ReviewsGiven > stats[j].ReviewsGiven
+	})
+
+	return stats
 }
 
 // --- Helpers ---

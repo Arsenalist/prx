@@ -232,18 +232,30 @@ func (c *Client) GetTimelineEvents(owner, repo string, number int) ([]provider.T
 		var evt struct {
 			Event     string `json:"event"`
 			CreatedAt string `json:"created_at"`
+			State     string `json:"state"`
 			Actor     struct {
 				Login string `json:"login"`
 			} `json:"actor"`
+			User struct {
+				Login string `json:"login"`
+			} `json:"user"`
 		}
 		json.Unmarshal(raw, &evt)
 
-		events = append(events, provider.TimelineEvent{
+		te := provider.TimelineEvent{
 			EventType: evt.Event,
 			CreatedAt: evt.CreatedAt,
 			Actor:     evt.Actor.Login,
 			RawJSON:   string(raw),
-		})
+		}
+		// For reviewed events, the actor is in "user" field and state indicates the review outcome
+		if evt.Event == "reviewed" {
+			te.ReviewState = evt.State
+			if te.Actor == "" {
+				te.Actor = evt.User.Login
+			}
+		}
+		events = append(events, te)
 	}
 
 	return events, nil
@@ -325,22 +337,27 @@ func hasNextPage(resp *http.Response) bool {
 // --- GitHub API types ---
 
 type ghPullRequest struct {
-	Number    int    `json:"number"`
-	Title     string `json:"title"`
-	State     string `json:"state"`
-	Draft     bool   `json:"draft"`
-	HTMLURL   string `json:"html_url"`
-	Body      string `json:"body"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
-	MergedAt  *string `json:"merged_at"`
-	ClosedAt  *string `json:"closed_at"`
-	Additions int    `json:"additions"`
-	Deletions int    `json:"deletions"`
-	ChangedFiles int `json:"changed_files"`
-	User      struct {
+	Number         int     `json:"number"`
+	Title          string  `json:"title"`
+	State          string  `json:"state"`
+	Draft          bool    `json:"draft"`
+	HTMLURL        string  `json:"html_url"`
+	Body           string  `json:"body"`
+	CreatedAt      string  `json:"created_at"`
+	UpdatedAt      string  `json:"updated_at"`
+	MergedAt       *string `json:"merged_at"`
+	ClosedAt       *string `json:"closed_at"`
+	Additions      int     `json:"additions"`
+	Deletions      int     `json:"deletions"`
+	ChangedFiles   int     `json:"changed_files"`
+	Comments       int     `json:"comments"`
+	ReviewComments int     `json:"review_comments"`
+	User           struct {
 		Login string `json:"login"`
 	} `json:"user"`
+	MergedBy *struct {
+		Login string `json:"login"`
+	} `json:"merged_by"`
 	Base struct {
 		Ref string `json:"ref"`
 		SHA string `json:"sha"`
@@ -375,24 +392,30 @@ func normalizePR(ghPR ghPullRequest) provider.PullRequest {
 		state = "merged"
 	}
 
-	return provider.PullRequest{
-		Number:       ghPR.Number,
-		Title:        ghPR.Title,
-		State:        state,
-		Author:       ghPR.User.Login,
-		URL:          ghPR.HTMLURL,
-		CreatedAt:    ghPR.CreatedAt,
-		UpdatedAt:    ghPR.UpdatedAt,
-		MergedAt:     ghPR.MergedAt,
-		ClosedAt:     ghPR.ClosedAt,
-		IsDraft:      ghPR.Draft,
-		Additions:    ghPR.Additions,
-		Deletions:    ghPR.Deletions,
-		ChangedFiles: ghPR.ChangedFiles,
-		BaseBranch:   ghPR.Base.Ref,
-		HeadBranch:   ghPR.Head.Ref,
-		BaseSHA:      ghPR.Base.SHA,
-		HeadSHA:      ghPR.Head.SHA,
-		Body:         ghPR.Body,
+	pr := provider.PullRequest{
+		Number:             ghPR.Number,
+		Title:              ghPR.Title,
+		State:              state,
+		Author:             ghPR.User.Login,
+		URL:                ghPR.HTMLURL,
+		CreatedAt:          ghPR.CreatedAt,
+		UpdatedAt:          ghPR.UpdatedAt,
+		MergedAt:           ghPR.MergedAt,
+		ClosedAt:           ghPR.ClosedAt,
+		IsDraft:            ghPR.Draft,
+		Additions:          ghPR.Additions,
+		Deletions:          ghPR.Deletions,
+		ChangedFiles:       ghPR.ChangedFiles,
+		BaseBranch:         ghPR.Base.Ref,
+		HeadBranch:         ghPR.Head.Ref,
+		BaseSHA:            ghPR.Base.SHA,
+		HeadSHA:            ghPR.Head.SHA,
+		Body:               ghPR.Body,
+		CommentCount:       ghPR.Comments,
+		ReviewCommentCount: ghPR.ReviewComments,
 	}
+	if ghPR.MergedBy != nil {
+		pr.MergedBy = ghPR.MergedBy.Login
+	}
+	return pr
 }

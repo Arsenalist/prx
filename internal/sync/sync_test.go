@@ -313,6 +313,56 @@ func TestSyncTimelineExtractsReadyForReview(t *testing.T) {
 	assert.Equal(t, "2026-03-05T14:00:00Z", *prs[0].ReadyForReviewAt)
 }
 
+func TestSyncMapsNewProviderFields(t *testing.T) {
+	s := newTestStore(t)
+	_, repoID := setupRepo(t, s)
+
+	mergedAt := "2026-03-05T14:00:00Z"
+	mock := &mockProvider{
+		prs: []provider.PullRequest{
+			{Number: 1, Title: "PR 1", State: "merged", Author: "alice", URL: "u",
+				CreatedAt: "2026-03-01T10:00:00Z", UpdatedAt: "2026-03-05T10:00:00Z",
+				MergedAt: &mergedAt, BaseSHA: "aaa", HeadSHA: "bbb",
+				MergedBy: "bob", CommentCount: 5, ReviewCommentCount: 3},
+		},
+		fullPRs: map[int]*provider.PullRequest{
+			1: {Number: 1, Title: "PR 1", State: "merged", Author: "alice", URL: "u",
+				CreatedAt: "2026-03-01T10:00:00Z", UpdatedAt: "2026-03-05T10:00:00Z",
+				MergedAt: &mergedAt, Additions: 100, Deletions: 20, BaseSHA: "aaa", HeadSHA: "bbb",
+				MergedBy: "bob", CommentCount: 5, ReviewCommentCount: 3,
+				RawJSON: `{"number":1,"merged_by":{"login":"bob"},"comments":5,"review_comments":3}`},
+		},
+		compares: map[string]*provider.BranchComparison{
+			"aaa...bbb": {MergeBaseSHA: "aaa", CommitsCount: 1},
+		},
+		timeline: map[int][]provider.TimelineEvent{
+			1: {
+				{EventType: "reviewed", CreatedAt: "2026-03-03T10:00:00Z", Actor: "reviewer1",
+					ReviewState: "approved", RawJSON: `{"event":"reviewed","state":"approved"}`},
+			},
+		},
+	}
+
+	engine := NewEngine(mock, s)
+	_, err := engine.SyncRepo(1, repoID, "org", "repo", Options{PerPage: 100})
+	require.NoError(t, err)
+
+	// Verify new PR fields stored
+	prs, err := s.ListPullRequests(store.PRFilters{RepoIDs: []int64{repoID}})
+	require.NoError(t, err)
+	require.Len(t, prs, 1)
+	require.NotNil(t, prs[0].MergedBy)
+	assert.Equal(t, "bob", *prs[0].MergedBy)
+	assert.Equal(t, 5, prs[0].CommentCount)
+	assert.Equal(t, 3, prs[0].ReviewCommentCount)
+
+	// Verify review_state stored in timeline events
+	rows, err := s.RawQuery("SELECT review_state FROM timeline_events WHERE event_type = 'reviewed'")
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "approved", rows[0]["review_state"])
+}
+
 func TestCompileTestPatterns(t *testing.T) {
 	patterns := CompileTestPatterns([]string{
 		"_test\\.go$",

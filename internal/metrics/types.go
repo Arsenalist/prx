@@ -2,11 +2,12 @@ package metrics
 
 // AnalysisResult holds the complete output of an analysis run.
 type AnalysisResult struct {
-	Meta          Meta              `json:"meta"`
-	Summary       Summary           `json:"summary"`
-	Developers    []DeveloperStats  `json:"developers"`
-	SlowestPRs    []PRTiming        `json:"slowest_prs"`
-	RepoBreakdown []RepoStats       `json:"repo_breakdown,omitempty"`
+	Meta          Meta             `json:"meta"`
+	Summary       Summary          `json:"summary"`
+	Developers    []DeveloperStats `json:"developers"`
+	SlowestPRs    []PRTiming       `json:"slowest_prs"`
+	RepoBreakdown []RepoStats      `json:"repo_breakdown,omitempty"`
+	ReviewerStats []ReviewerStats  `json:"reviewer_stats,omitempty"`
 }
 
 // Meta contains metadata about the analysis run.
@@ -26,13 +27,31 @@ type Range struct {
 
 // Summary holds aggregate metrics.
 type Summary struct {
-	TotalPRs      int        `json:"total_prs"`
-	MergedPRs     int        `json:"merged_prs"`
-	ClosedPRs     int        `json:"closed_prs"`
-	OpenPRs       int        `json:"open_prs"`
-	UniqueAuthors int        `json:"unique_authors"`
-	LOC           LOCMetrics `json:"loc"`
-	Timing        TimingAvg  `json:"timing"`
+	TotalPRs      int           `json:"total_prs"`
+	MergedPRs     int           `json:"merged_prs"`
+	ClosedPRs     int           `json:"closed_prs"`
+	OpenPRs       int           `json:"open_prs"`
+	UniqueAuthors int           `json:"unique_authors"`
+	LOC           LOCMetrics    `json:"loc"`
+	Timing        TimingAvg     `json:"timing"`
+	Review        ReviewMetrics `json:"review"`
+}
+
+// ReviewMetrics holds aggregate review metrics.
+type ReviewMetrics struct {
+	AvgTimeToFirstReviewHours    float64 `json:"avg_time_to_first_review_hours"`
+	MedianTimeToFirstReviewHours float64 `json:"median_time_to_first_review_hours"`
+	AvgReviewCycles              float64 `json:"avg_review_cycles"`
+	AvgCommentsPerPR             float64 `json:"avg_comments_per_pr"`
+}
+
+// ReviewerStats holds per-reviewer metrics.
+type ReviewerStats struct {
+	Login                    string  `json:"login"`
+	ReviewsGiven             int     `json:"reviews_given"`
+	Approvals                int     `json:"approvals"`
+	ChangesRequested         int     `json:"changes_requested"`
+	AvgReviewTurnaroundHours float64 `json:"avg_review_turnaround_hours"`
 }
 
 // LOCMetrics holds lines of code metrics.

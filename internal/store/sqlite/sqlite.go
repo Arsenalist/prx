@@ -3,6 +3,7 @@ package sqlite
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -81,6 +82,25 @@ func (s *SQLiteStore) Migrate() error {
 			}
 		}
 		_, err := s.db.Exec("INSERT INTO schema_version (version, applied_at) VALUES (2, ?)", time.Now().UTC().Format(time.RFC3339))
+		if err != nil {
+			return fmt.Errorf("recording schema version: %w", err)
+		}
+		version = 2
+	}
+
+	if version < 3 {
+		for _, stmt := range []string{
+			"ALTER TABLE pull_requests ADD COLUMN merged_by TEXT",
+			"ALTER TABLE pull_requests ADD COLUMN comment_count INTEGER NOT NULL DEFAULT 0",
+			"ALTER TABLE pull_requests ADD COLUMN review_comment_count INTEGER NOT NULL DEFAULT 0",
+			"ALTER TABLE timeline_events ADD COLUMN review_state TEXT",
+			"CREATE INDEX IF NOT EXISTS idx_timeline_event_type ON timeline_events(pr_id, event_type)",
+		} {
+			if _, err := s.db.Exec(stmt); err != nil {
+				return fmt.Errorf("applying schema v3: %w", err)
+			}
+		}
+		_, err := s.db.Exec("INSERT INTO schema_version (version, applied_at) VALUES (3, ?)", time.Now().UTC().Format(time.RFC3339))
 		if err != nil {
 			return fmt.Errorf("recording schema version: %w", err)
 		}
@@ -399,17 +419,18 @@ func (s *SQLiteStore) UpsertPullRequest(pr store.PullRequestRecord) (int64, erro
 	_, err := s.db.Exec(`
 		INSERT INTO pull_requests (repo_id, number, title, state, author, url, created_at, updated_at,
 			merged_at, closed_at, is_draft, ready_for_review_at, additions, deletions, changed_files,
-			base_branch, head_branch, body, raw_data)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			base_branch, head_branch, body, raw_data, merged_by, comment_count, review_comment_count)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(repo_id, number) DO UPDATE SET
 			title=excluded.title, state=excluded.state, author=excluded.author, url=excluded.url,
 			created_at=excluded.created_at, updated_at=excluded.updated_at, merged_at=excluded.merged_at,
 			closed_at=excluded.closed_at, is_draft=excluded.is_draft, ready_for_review_at=excluded.ready_for_review_at,
 			additions=excluded.additions, deletions=excluded.deletions, changed_files=excluded.changed_files,
-			base_branch=excluded.base_branch, head_branch=excluded.head_branch, body=excluded.body, raw_data=excluded.raw_data
+			base_branch=excluded.base_branch, head_branch=excluded.head_branch, body=excluded.body, raw_data=excluded.raw_data,
+			merged_by=excluded.merged_by, comment_count=excluded.comment_count, review_comment_count=excluded.review_comment_count
 	`, pr.RepoID, pr.Number, pr.Title, pr.State, pr.Author, pr.URL, pr.CreatedAt, pr.UpdatedAt,
 		pr.MergedAt, pr.ClosedAt, isDraft, pr.ReadyForReviewAt, pr.Additions, pr.Deletions, pr.ChangedFiles,
-		pr.BaseBranch, pr.HeadBranch, pr.Body, pr.RawData)
+		pr.BaseBranch, pr.HeadBranch, pr.Body, pr.RawData, pr.MergedBy, pr.CommentCount, pr.ReviewCommentCount)
 	if err != nil {
 		return 0, err
 	}
@@ -436,7 +457,7 @@ func (s *SQLiteStore) GetPRState(repoID int64, number int) (*store.PRStateResult
 func (s *SQLiteStore) ListPullRequests(filters store.PRFilters) ([]store.PullRequestRecord, error) {
 	query := `SELECT id, repo_id, number, title, state, author, url, created_at, updated_at,
 		merged_at, closed_at, is_draft, ready_for_review_at, additions, deletions, changed_files,
-		base_branch, head_branch, body, raw_data FROM pull_requests WHERE 1=1`
+		base_branch, head_branch, body, raw_data, merged_by, comment_count, review_comment_count FROM pull_requests WHERE 1=1`
 
 	var args []interface{}
 
@@ -491,7 +512,8 @@ func (s *SQLiteStore) ListPullRequests(filters store.PRFilters) ([]store.PullReq
 		if err := rows.Scan(&pr.ID, &pr.RepoID, &pr.Number, &pr.Title, &pr.State, &pr.Author,
 			&pr.URL, &pr.CreatedAt, &pr.UpdatedAt, &pr.MergedAt, &pr.ClosedAt, &isDraft,
 			&pr.ReadyForReviewAt, &pr.Additions, &pr.Deletions, &pr.ChangedFiles,
-			&pr.BaseBranch, &pr.HeadBranch, &pr.Body, &pr.RawData); err != nil {
+			&pr.BaseBranch, &pr.HeadBranch, &pr.Body, &pr.RawData,
+			&pr.MergedBy, &pr.CommentCount, &pr.ReviewCommentCount); err != nil {
 			return nil, err
 		}
 		pr.IsDraft = isDraft == 1
@@ -558,14 +580,14 @@ func (s *SQLiteStore) ReplaceTimelineEvents(prID int64, events []store.TimelineE
 		return err
 	}
 
-	stmt, err := tx.Prepare("INSERT INTO timeline_events (pr_id, event_type, created_at, actor, raw_data) VALUES (?, ?, ?, ?, ?)")
+	stmt, err := tx.Prepare("INSERT INTO timeline_events (pr_id, event_type, created_at, actor, raw_data, review_state) VALUES (?, ?, ?, ?, ?, ?)")
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 
 	for _, e := range events {
-		if _, err := stmt.Exec(prID, e.EventType, e.CreatedAt, e.Actor, e.RawData); err != nil {
+		if _, err := stmt.Exec(prID, e.EventType, e.CreatedAt, e.Actor, e.RawData, e.ReviewState); err != nil {
 			return err
 		}
 	}
@@ -653,6 +675,98 @@ func (s *SQLiteStore) Stats() (*store.StoreStats, error) {
 	}
 
 	return stats, nil
+}
+
+// BackfillExtractedFields parses raw_data JSON from existing rows to populate
+// the new extracted columns (merged_by, comment_count, review_comment_count, review_state).
+func (s *SQLiteStore) BackfillExtractedFields() (int, error) {
+	updated := 0
+
+	// Backfill pull_requests
+	rows, err := s.db.Query("SELECT id, raw_data FROM pull_requests WHERE raw_data IS NOT NULL AND raw_data != ''")
+	if err != nil {
+		return 0, fmt.Errorf("querying pull_requests: %w", err)
+	}
+	defer rows.Close()
+
+	type prUpdate struct {
+		id               int64
+		mergedBy         *string
+		commentCount     int
+		reviewCommentCount int
+	}
+	var prUpdates []prUpdate
+
+	for rows.Next() {
+		var id int64
+		var rawData string
+		if err := rows.Scan(&id, &rawData); err != nil {
+			continue
+		}
+		var parsed struct {
+			MergedBy       *struct{ Login string } `json:"merged_by"`
+			Comments       int                     `json:"comments"`
+			ReviewComments int                     `json:"review_comments"`
+		}
+		if err := json.Unmarshal([]byte(rawData), &parsed); err != nil {
+			continue
+		}
+		u := prUpdate{id: id, commentCount: parsed.Comments, reviewCommentCount: parsed.ReviewComments}
+		if parsed.MergedBy != nil {
+			login := parsed.MergedBy.Login
+			u.mergedBy = &login
+		}
+		prUpdates = append(prUpdates, u)
+	}
+	rows.Close()
+
+	for _, u := range prUpdates {
+		_, err := s.db.Exec("UPDATE pull_requests SET merged_by = ?, comment_count = ?, review_comment_count = ? WHERE id = ?",
+			u.mergedBy, u.commentCount, u.reviewCommentCount, u.id)
+		if err == nil {
+			updated++
+		}
+	}
+
+	// Backfill timeline_events review_state
+	evtRows, err := s.db.Query("SELECT id, raw_data FROM timeline_events WHERE event_type = 'reviewed' AND (review_state IS NULL OR review_state = '')")
+	if err != nil {
+		return updated, fmt.Errorf("querying timeline_events: %w", err)
+	}
+	defer evtRows.Close()
+
+	type evtUpdate struct {
+		id    int64
+		state string
+	}
+	var evtUpdates []evtUpdate
+
+	for evtRows.Next() {
+		var id int64
+		var rawData string
+		if err := evtRows.Scan(&id, &rawData); err != nil {
+			continue
+		}
+		var parsed struct {
+			State string `json:"state"`
+		}
+		if err := json.Unmarshal([]byte(rawData), &parsed); err != nil {
+			continue
+		}
+		if parsed.State != "" {
+			evtUpdates = append(evtUpdates, evtUpdate{id: id, state: parsed.State})
+		}
+	}
+	evtRows.Close()
+
+	for _, u := range evtUpdates {
+		_, err := s.db.Exec("UPDATE timeline_events SET review_state = ? WHERE id = ?", u.state, u.id)
+		if err == nil {
+			updated++
+		}
+	}
+
+	return updated, nil
 }
 
 // ResetAll deletes all data from every table except schema_version.

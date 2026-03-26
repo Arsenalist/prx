@@ -40,6 +40,31 @@ func FormatMarkdown(result *metrics.AnalysisResult) string {
 	sb.WriteString(fmt.Sprintf("| Median Time to Merge | %s |\n", FormatDuration(result.Summary.Timing.MedianTimeToMergeHours)))
 	sb.WriteString("\n")
 
+	// Review Metrics
+	if result.Summary.Review.AvgTimeToFirstReviewHours > 0 || result.Summary.Review.AvgReviewCycles > 0 || result.Summary.Review.AvgCommentsPerPR > 0 {
+		sb.WriteString("## Review Metrics\n\n")
+		sb.WriteString("| Metric | Value |\n")
+		sb.WriteString("|--------|-------|\n")
+		sb.WriteString(fmt.Sprintf("| Avg Time to First Review | %s |\n", FormatDuration(result.Summary.Review.AvgTimeToFirstReviewHours)))
+		sb.WriteString(fmt.Sprintf("| Median Time to First Review | %s |\n", FormatDuration(result.Summary.Review.MedianTimeToFirstReviewHours)))
+		sb.WriteString(fmt.Sprintf("| Avg Review Cycles | %.1f |\n", result.Summary.Review.AvgReviewCycles))
+		sb.WriteString(fmt.Sprintf("| Avg Comments/PR | %.1f |\n", result.Summary.Review.AvgCommentsPerPR))
+		sb.WriteString("\n")
+	}
+
+	// Reviewer Stats
+	if len(result.ReviewerStats) > 0 {
+		sb.WriteString("## Reviewer Stats\n\n")
+		sb.WriteString("| Reviewer | Reviews | Approvals | Changes Req | Avg Turnaround |\n")
+		sb.WriteString("|----------|---------|-----------|-------------|----------------|\n")
+		for _, rs := range result.ReviewerStats {
+			sb.WriteString(fmt.Sprintf("| %s | %d | %d | %d | %s |\n",
+				rs.Login, rs.ReviewsGiven, rs.Approvals, rs.ChangesRequested,
+				FormatDuration(rs.AvgReviewTurnaroundHours)))
+		}
+		sb.WriteString("\n")
+	}
+
 	// Developer Metrics
 	if len(result.Developers) > 0 {
 		sb.WriteString("## Developer Metrics\n\n")

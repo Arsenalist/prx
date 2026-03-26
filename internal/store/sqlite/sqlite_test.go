@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -537,6 +538,99 @@ func TestSettingsCRUD(t *testing.T) {
 	settings, _ = s.ListSettings()
 	assert.Len(t, settings, 2)
 }
+
+func TestMigrateV3AddsNewColumns(t *testing.T) {
+	s := newTestDB(t) // newTestDB runs Migrate() which should apply V3
+
+	// Verify new columns exist by inserting and reading PR with new fields
+	instID, _ := s.UpsertInstance(store.InstanceRecord{Name: "gh", Type: "github", BaseURL: "https://api.github.com"})
+	repoID, _ := s.UpsertRepository(store.RepositoryRecord{InstanceID: instID, Owner: "org", Name: "repo", FullName: "org/repo"})
+
+	mergedAt := "2026-03-05T14:00:00Z"
+	mergedBy := "bob"
+	prID, err := s.UpsertPullRequest(store.PullRequestRecord{
+		RepoID: repoID, Number: 1, Title: "PR 1", State: "merged", Author: "alice",
+		URL: "https://example.com/1", CreatedAt: "2026-03-01T10:00:00Z", UpdatedAt: "2026-03-05T14:00:00Z",
+		MergedAt: &mergedAt, MergedBy: &mergedBy, CommentCount: 5, ReviewCommentCount: 3,
+	})
+	require.NoError(t, err)
+
+	// Read back and verify new fields
+	prs, err := s.ListPullRequests(store.PRFilters{RepoIDs: []int64{repoID}})
+	require.NoError(t, err)
+	require.Len(t, prs, 1)
+	require.NotNil(t, prs[0].MergedBy)
+	assert.Equal(t, "bob", *prs[0].MergedBy)
+	assert.Equal(t, 5, prs[0].CommentCount)
+	assert.Equal(t, 3, prs[0].ReviewCommentCount)
+
+	// Verify timeline events with review_state
+	ts := "2026-03-03T10:00:00Z"
+	actor := "reviewer"
+	events := []store.TimelineEventRecord{
+		{EventType: "reviewed", CreatedAt: &ts, Actor: &actor, ReviewState: strPtr("approved"), RawData: `{"event":"reviewed","state":"approved"}`},
+		{EventType: "reviewed", CreatedAt: &ts, Actor: &actor, ReviewState: strPtr("changes_requested"), RawData: `{"event":"reviewed","state":"changes_requested"}`},
+	}
+	err = s.ReplaceTimelineEvents(prID, events)
+	require.NoError(t, err)
+
+	// Verify review_state was stored
+	rows, err := s.RawQuery("SELECT event_type, review_state FROM timeline_events WHERE pr_id = " + fmt.Sprintf("%d", prID) + " ORDER BY id")
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	assert.Equal(t, "approved", rows[0]["review_state"])
+	assert.Equal(t, "changes_requested", rows[1]["review_state"])
+
+	// Verify the index exists
+	indexRows, err := s.RawQuery("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_timeline_event_type'")
+	require.NoError(t, err)
+	assert.Len(t, indexRows, 1)
+}
+
+func TestBackfillExtractedFields(t *testing.T) {
+	s := newTestDB(t)
+	instID, _ := s.UpsertInstance(store.InstanceRecord{Name: "gh", Type: "github", BaseURL: "https://api.github.com"})
+	repoID, _ := s.UpsertRepository(store.RepositoryRecord{InstanceID: instID, Owner: "org", Name: "repo", FullName: "org/repo"})
+
+	// Insert PR with raw_data containing merged_by, comments, review_comments
+	rawData := `{"merged_by":{"login":"merger"},"comments":7,"review_comments":4}`
+	prID, err := s.UpsertPullRequest(store.PullRequestRecord{
+		RepoID: repoID, Number: 1, Title: "PR with raw", State: "merged", Author: "alice",
+		URL: "u", CreatedAt: "2026-03-01T10:00:00Z", UpdatedAt: "2026-03-05T14:00:00Z",
+		RawData: &rawData,
+	})
+	require.NoError(t, err)
+
+	// Insert timeline event with raw_data containing state for reviewed event
+	ts := "2026-03-02T10:00:00Z"
+	actor := "bob"
+	reviewRaw := `{"event":"reviewed","state":"approved","user":{"login":"bob"}}`
+	s.ReplaceTimelineEvents(prID, []store.TimelineEventRecord{
+		{EventType: "reviewed", CreatedAt: &ts, Actor: &actor, RawData: reviewRaw},
+	})
+
+	// Run backfill
+	updated, err := s.BackfillExtractedFields()
+	require.NoError(t, err)
+	assert.Greater(t, updated, 0)
+
+	// Verify PR fields were populated
+	prs, err := s.ListPullRequests(store.PRFilters{RepoIDs: []int64{repoID}})
+	require.NoError(t, err)
+	require.Len(t, prs, 1)
+	require.NotNil(t, prs[0].MergedBy)
+	assert.Equal(t, "merger", *prs[0].MergedBy)
+	assert.Equal(t, 7, prs[0].CommentCount)
+	assert.Equal(t, 4, prs[0].ReviewCommentCount)
+
+	// Verify timeline review_state was populated
+	rows, err := s.RawQuery("SELECT review_state FROM timeline_events WHERE pr_id = " + fmt.Sprintf("%d", prID))
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "approved", rows[0]["review_state"])
+}
+
+func strPtr(s string) *string { return &s }
 
 func TestMigrateV1ToV2(t *testing.T) {
 	// Create a V1-only database, then migrate to V2

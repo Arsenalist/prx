@@ -278,12 +278,17 @@ func (e *Engine) fetchAndStoreFull(repoID int64, owner, repo string, listPR prov
 		for _, evt := range events {
 			actor := evt.Actor
 			createdAt := evt.CreatedAt
-			records = append(records, store.TimelineEventRecord{
+			rec := store.TimelineEventRecord{
 				EventType: evt.EventType,
 				CreatedAt: &createdAt,
 				Actor:     &actor,
 				RawData:   evt.RawJSON,
-			})
+			}
+			if evt.ReviewState != "" {
+				reviewState := evt.ReviewState
+				rec.ReviewState = &reviewState
+			}
+			records = append(records, rec)
 		}
 		e.store.ReplaceTimelineEvents(prID, records)
 		if opts.Verbose {
@@ -312,26 +317,32 @@ func prToRecord(repoID int64, pr *provider.PullRequest) store.PullRequestRecord 
 	rawData := pr.RawJSON
 
 	rec := store.PullRequestRecord{
-		RepoID:       repoID,
-		Number:       pr.Number,
-		Title:        pr.Title,
-		State:        pr.State,
-		Author:       pr.Author,
-		URL:          pr.URL,
-		CreatedAt:    pr.CreatedAt,
-		UpdatedAt:    pr.UpdatedAt,
-		MergedAt:     pr.MergedAt,
-		ClosedAt:     pr.ClosedAt,
-		IsDraft:      pr.IsDraft,
-		Additions:    pr.Additions,
-		Deletions:    pr.Deletions,
-		ChangedFiles: pr.ChangedFiles,
-		BaseBranch:   &baseBranch,
-		HeadBranch:   &headBranch,
-		Body:         &body,
+		RepoID:             repoID,
+		Number:             pr.Number,
+		Title:              pr.Title,
+		State:              pr.State,
+		Author:             pr.Author,
+		URL:                pr.URL,
+		CreatedAt:          pr.CreatedAt,
+		UpdatedAt:          pr.UpdatedAt,
+		MergedAt:           pr.MergedAt,
+		ClosedAt:           pr.ClosedAt,
+		IsDraft:            pr.IsDraft,
+		Additions:          pr.Additions,
+		Deletions:          pr.Deletions,
+		ChangedFiles:       pr.ChangedFiles,
+		BaseBranch:         &baseBranch,
+		HeadBranch:         &headBranch,
+		Body:               &body,
+		CommentCount:       pr.CommentCount,
+		ReviewCommentCount: pr.ReviewCommentCount,
 	}
 	if rawData != "" {
 		rec.RawData = &rawData
+	}
+	if pr.MergedBy != "" {
+		mergedBy := pr.MergedBy
+		rec.MergedBy = &mergedBy
 	}
 	return rec
 }

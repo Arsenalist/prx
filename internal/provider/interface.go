@@ -31,25 +31,28 @@ type ListPROptions struct {
 
 // PullRequest is the normalized PR representation across providers.
 type PullRequest struct {
-	Number       int
-	Title        string
-	State        string // "open", "closed", "merged"
-	Author       string
-	URL          string
-	CreatedAt    string
-	UpdatedAt    string
-	MergedAt     *string
-	ClosedAt     *string
-	IsDraft      bool
-	Additions    int
-	Deletions    int
-	ChangedFiles int
-	BaseBranch   string
-	HeadBranch   string
-	BaseSHA      string
-	HeadSHA      string
-	Body         string
-	RawJSON      string // Full API response as JSON
+	Number             int
+	Title              string
+	State              string // "open", "closed", "merged"
+	Author             string
+	URL                string
+	CreatedAt          string
+	UpdatedAt          string
+	MergedAt           *string
+	ClosedAt           *string
+	IsDraft            bool
+	Additions          int
+	Deletions          int
+	ChangedFiles       int
+	BaseBranch         string
+	HeadBranch         string
+	BaseSHA            string
+	HeadSHA            string
+	Body               string
+	RawJSON            string // Full API response as JSON
+	MergedBy           string
+	CommentCount       int
+	ReviewCommentCount int
 }
 
 // BranchComparison holds the result of comparing two branches.
@@ -72,10 +75,11 @@ type FileChange struct {
 
 // TimelineEvent is a normalized event from a PR's timeline.
 type TimelineEvent struct {
-	EventType string
-	CreatedAt string
-	Actor     string
-	RawJSON   string
+	EventType   string
+	CreatedAt   string
+	Actor       string
+	RawJSON     string
+	ReviewState string // For "reviewed" events: approved, changes_requested, commented, dismissed
 }
 
 // RateLimit holds API rate limit information.
