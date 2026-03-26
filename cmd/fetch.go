@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -146,11 +147,8 @@ func runFetch(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
-		// Resolve token
-		token := os.Getenv(inst.TokenEnv)
-		if token == "" {
-			return fmt.Errorf("token environment variable %s is not set (needed for instance %q)", inst.TokenEnv, ref.instanceName)
-		}
+		// Resolve token: configured env var → common env vars → git config
+		token := resolveToken(inst.TokenEnv)
 
 		// Create provider
 		client := gh.NewClient(inst.BaseURL, token, inst.TLSSkipVerify, settings.Fetch.MaxRetries)
@@ -238,4 +236,29 @@ func runFetch(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// resolveToken tries multiple sources to find a GitHub token:
+// 1. The configured env var (e.g. GITHUB_TOKEN)
+// 2. Common env vars: GH_TOKEN, GITHUB_TOKEN, GITHUB_API_TOKEN, GHE_TOKEN
+// 3. git config --global rbc-ctx.oauth-token (set by enterprise tooling)
+func resolveToken(configuredEnv string) string {
+	if v := os.Getenv(configuredEnv); v != "" {
+		return v
+	}
+	for _, env := range []string{"GH_TOKEN", "GITHUB_TOKEN", "GITHUB_API_TOKEN", "GHE_TOKEN"} {
+		if env == configuredEnv {
+			continue // already checked
+		}
+		if v := os.Getenv(env); v != "" {
+			return v
+		}
+	}
+	out, err := exec.Command("git", "config", "--global", "rbc-ctx.oauth-token").Output()
+	if err == nil {
+		if v := strings.TrimSpace(string(out)); v != "" {
+			return v
+		}
+	}
+	return ""
 }
