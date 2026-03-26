@@ -8,6 +8,7 @@ type AnalysisResult struct {
 	SlowestPRs    []PRTiming       `json:"slowest_prs"`
 	RepoBreakdown []RepoStats      `json:"repo_breakdown,omitempty"`
 	ReviewerStats []ReviewerStats  `json:"reviewer_stats,omitempty"`
+	PRs           []PRDetail       `json:"prs,omitempty"`
 }
 
 // Meta contains metadata about the analysis run.
@@ -103,6 +104,21 @@ type PRTiming struct {
 	LOCTotal          int     `json:"loc_total"`
 	LOCTest           int     `json:"loc_test"`
 	LOCProduction     int     `json:"loc_production"`
+}
+
+// PRDetail holds per-PR detail for JSON output.
+type PRDetail struct {
+	Repo               string  `json:"repo"`
+	Number             int     `json:"number"`
+	Title              string  `json:"title"`
+	Author             string  `json:"author"`
+	State              string  `json:"state"`
+	URL                string  `json:"url"`
+	Body               string  `json:"body"`
+	CreatedAt          string  `json:"created_at"`
+	MergedAt           *string `json:"merged_at,omitempty"`
+	CommentCount       int     `json:"comment_count"`
+	ReviewCommentCount int     `json:"review_comment_count"`
 }
 
 // RepoStats holds per-repo breakdown.

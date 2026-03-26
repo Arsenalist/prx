@@ -46,8 +46,48 @@ func Calculate(prs []store.PullRequestRecord, db FileChangeReader, opts Calculat
 	result.Developers = calculateDeveloperStats(prs, db, opts)
 	result.SlowestPRs = calculateSlowestPRs(prs, db)
 	result.ReviewerStats = calculateReviewerStats(prs, db)
+	result.PRs = buildPRDetails(prs, db)
 
 	return result
+}
+
+func buildPRDetails(prs []store.PullRequestRecord, db FileChangeReader) []PRDetail {
+	// Build repo ID → name lookup
+	repoNames := make(map[int64]string)
+	if db != nil {
+		rows, err := db.RawQuery("SELECT id, full_name FROM repositories")
+		if err == nil {
+			for _, row := range rows {
+				id, ok := row["id"].(int64)
+				if !ok {
+					continue
+				}
+				name, _ := row["full_name"].(string)
+				repoNames[id] = name
+			}
+		}
+	}
+
+	details := make([]PRDetail, 0, len(prs))
+	for _, pr := range prs {
+		d := PRDetail{
+			Repo:               repoNames[pr.RepoID],
+			Number:             pr.Number,
+			Title:              pr.Title,
+			Author:             pr.Author,
+			State:              pr.State,
+			URL:                pr.URL,
+			CreatedAt:          pr.CreatedAt,
+			MergedAt:           pr.MergedAt,
+			CommentCount:       pr.CommentCount,
+			ReviewCommentCount: pr.ReviewCommentCount,
+		}
+		if pr.Body != nil {
+			d.Body = *pr.Body
+		}
+		details = append(details, d)
+	}
+	return details
 }
 
 func calculateSummary(prs []store.PullRequestRecord, db FileChangeReader) Summary {

@@ -27,11 +27,13 @@ func seedTestData(t *testing.T) (*sqlite.SQLiteStore, int64) {
 	readyAt := "2026-03-09T10:00:00Z"
 
 	// PR 1: alice, merged, fast
+	body1 := "Implements the fast feature"
 	pr1ID, _ := s.UpsertPullRequest(store.PullRequestRecord{
 		RepoID: repoID, Number: 1, Title: "Fast PR", State: "merged", Author: "alice",
 		URL: "https://github.com/org/repo/pull/1",
 		CreatedAt: "2026-03-01T10:00:00Z", UpdatedAt: "2026-03-05T14:00:00Z",
 		MergedAt: &mergedAt1, Additions: 100, Deletions: 20, ChangedFiles: 5,
+		Body: &body1,
 	})
 	sha1 := "abc"
 	date1 := "2026-02-28T10:00:00Z"
@@ -45,12 +47,14 @@ func seedTestData(t *testing.T) (*sqlite.SQLiteStore, int64) {
 	})
 
 	// PR 2: bob, merged, slow, was draft
+	body2 := "Slow draft with many changes"
 	pr2ID, _ := s.UpsertPullRequest(store.PullRequestRecord{
 		RepoID: repoID, Number: 2, Title: "Slow draft PR", State: "merged", Author: "bob",
 		URL: "https://github.com/org/repo/pull/2",
 		CreatedAt: "2026-03-02T08:00:00Z", UpdatedAt: "2026-03-12T10:00:00Z",
 		MergedAt: &mergedAt2, ReadyForReviewAt: &readyAt,
 		Additions: 300, Deletions: 50, ChangedFiles: 12,
+		Body: &body2,
 	})
 	sha2 := "def"
 	date2 := "2026-02-25T10:00:00Z"
@@ -349,4 +353,52 @@ func TestMedian(t *testing.T) {
 func TestAvg(t *testing.T) {
 	assert.Equal(t, 3.0, avg([]float64{1, 3, 5}))
 	assert.Equal(t, 0.0, avg([]float64{}))
+}
+
+func TestCalculatePRDetails(t *testing.T) {
+	s, repoID := seedTestData(t)
+
+	prs, err := s.ListPullRequests(store.PRFilters{RepoIDs: []int64{repoID}})
+	require.NoError(t, err)
+
+	result := Calculate(prs, s, CalculateOptions{
+		StartDate: "2026-03-01",
+		EndDate:   "2026-03-31",
+		Repos:     []string{"org/repo"},
+	})
+
+	require.Len(t, result.PRs, 4)
+
+	// Build lookup by number
+	byNumber := make(map[int]PRDetail)
+	for _, d := range result.PRs {
+		byNumber[d.Number] = d
+	}
+
+	// PR 1: merged, has body
+	pr1 := byNumber[1]
+	assert.Equal(t, "Fast PR", pr1.Title)
+	assert.Equal(t, "Implements the fast feature", pr1.Body)
+	assert.Equal(t, "merged", pr1.State)
+	assert.Equal(t, "alice", pr1.Author)
+	assert.Equal(t, "org/repo", pr1.Repo)
+	assert.NotNil(t, pr1.MergedAt)
+
+	// PR 2: merged, has body and comment counts
+	pr2 := byNumber[2]
+	assert.Equal(t, "Slow draft PR", pr2.Title)
+	assert.Equal(t, "Slow draft with many changes", pr2.Body)
+	assert.Equal(t, "merged", pr2.State)
+	assert.NotNil(t, pr2.MergedAt)
+
+	// PR 3: closed, no body
+	pr3 := byNumber[3]
+	assert.Equal(t, "closed", pr3.State)
+	assert.Empty(t, pr3.Body)
+	assert.Nil(t, pr3.MergedAt)
+
+	// PR 4: open
+	pr4 := byNumber[4]
+	assert.Equal(t, "open", pr4.State)
+	assert.Nil(t, pr4.MergedAt)
 }
