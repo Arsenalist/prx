@@ -154,7 +154,15 @@ When using `--format json`, the output is structured as:
   },
   "developers": [...],
   "slowest_prs": [...],
-  "reviewer_stats": [...]
+  "reviewer_stats": [...],
+  "prs": [
+    {
+      "repo": "owner/repo", "number": 1, "title": "PR title", "author": "alice",
+      "state": "merged", "url": "https://...", "body": "PR description text",
+      "created_at": "2026-01-01T00:00:00Z", "merged_at": "2026-01-02T00:00:00Z",
+      "comment_count": 3, "review_comment_count": 2
+    }
+  ]
 }
 ```
 
@@ -233,7 +241,7 @@ prx db raw owner/repo 42
 ```
 
 ### Database Schema (key tables)
-- `pull_requests` — id, repo_id, number, title, state, author, created_at, merged_at, additions, deletions, merged_by, comment_count, review_comment_count, raw_data
+- `pull_requests` — id, repo_id, number, title, body, state, author, created_at, merged_at, additions, deletions, merged_by, comment_count, review_comment_count, raw_data
 - `timeline_events` — id, pr_id, event_type, created_at, actor, review_state, raw_data
 - `file_changes` — id, pr_id, filename, additions, deletions, is_test
 - `branch_info` — pr_id, first_commit_date, commits_count, total_additions, total_deletions
