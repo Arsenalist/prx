@@ -3,14 +3,53 @@ name: prx
 description: >
   Use prx to fetch GitHub pull request data, store it locally in SQLite, and generate developer
   productivity metrics including velocity, timing, review quality, and collaboration stats.
-  Use this skill when the user asks about PR metrics, developer productivity, code review analytics,
-  team performance, merge times, review turnaround, or engineering reports. Also use when the user
-  wants to set up repository tracking, configure teams, or generate reports from GitHub data.
+  TRIGGER when: user asks about PR metrics, developer productivity, code review analytics,
+  team performance, merge times, review turnaround, engineering reports, OR wants to create/manage
+  teams ("create team X", "add repo to team"), add/remove repositories, fetch PR data for a
+  time period ("fetch last 30 days", "get PRs since January"), generate reports or stats
+  ("give me report for team X", "stats for repo Y", "what did alice work on"), compare developers
+  or teams, export PR data, or check what data is available.
 ---
 
 # prx — PR Analytics CLI
 
 prx fetches pull request data from GitHub (including Enterprise), stores it in a local SQLite database, and computes developer productivity metrics, review analytics, and team reports.
+
+## Agent Decision Workflow
+
+Before running any command, follow this checklist:
+
+1. **Does the database exist?** Run `prx status`. If it fails, run `prx init` first.
+2. **Is an instance configured?** Run `prx instance list`. If empty, add one (see Setup).
+3. **Are the repos tracked?** Run `prx repo list`. If the needed repo isn't listed, `prx repo add owner/repo --instance <name>`.
+4. **Is data available for the requested time range?** Run `prx status` (or `prx status --team X`) to check last fetch time and PR counts. If data is stale or missing for the requested period, fetch it — but be smart (see Smart Fetching below).
+5. **Run the actual command** (analyze, report, export, summarize).
+
+## Natural Language → Commands
+
+| User says | Commands to run |
+|-----------|----------------|
+| "create team X" | `prx team create X` |
+| "add repo A to team X" | `prx team add-repo X owner/A` |
+| "create team Y and add repos A, B, C" | `prx team create Y` then `prx team add-repo Y owner/A` (repeat for B, C) |
+| "give me report for team X" | check status → fetch if needed → `prx report --team X --format json` |
+| "give me stats for repo Y" | check status → fetch if needed → `prx analyze --repo owner/Y --format json` |
+| "what did alice work on last month?" | check status → fetch if needed → `prx analyze --author alice --preset last-month --format json` |
+| "compare teams A and B" | run `prx analyze --team A --format json` and `prx analyze --team B --format json` separately |
+| "fetch PRs from last 90 days" | `prx fetch --preset last-90d` |
+| "fetch PRs since March" | `prx fetch --since 2026-03-01` |
+
+## Smart Fetching
+
+Fetching is expensive — it makes GitHub API calls. Follow these rules:
+
+- **Always check before fetching**: run `prx status --team X` or `prx status` to see when data was last fetched and how many PRs are stored. Only fetch if data is missing or stale for the requested period.
+- **Use time bounds**: `prx fetch --since YYYY-MM-DD --until YYYY-MM-DD` to limit API calls to just the needed date range.
+- **Use `--preset`**: `prx fetch --preset last-30d` for common ranges. Explicit `--since`/`--until` override preset values.
+- **Scope by team or repo**: `prx fetch --team X` or `prx fetch --repo owner/repo` — don't fetch everything when you only need one team/repo.
+- **Use `--dry-run` first if unsure**: shows what would be fetched without making API calls.
+- **Incremental by default**: prx skips closed/merged PRs already in DB, so re-fetching is safe but still costs API calls for listing.
+- **Always use `--format json`** when programmatically consuming analyze/report/export output.
 
 ## Binary Location
 
@@ -98,6 +137,15 @@ prx fetch --repo owner/repo
 
 # Fetch a team's repos
 prx fetch --team backend
+
+# Fetch with time bounds (filters by updated_at — catches PRs closed/merged in range)
+prx fetch --preset last-30d
+prx fetch --since 2026-03-01 --until 2026-04-01
+prx fetch --team backend --preset last-90d
+prx fetch --since 2026-01-01 --repo owner/repo
+
+# Preset + explicit override (preset sets both bounds, explicit flags override either end)
+prx fetch --preset last-90d --since 2026-01-15
 
 # Full re-fetch (ignore incremental state)
 prx fetch --full

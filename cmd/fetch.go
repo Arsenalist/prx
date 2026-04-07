@@ -25,7 +25,9 @@ func init() {
 	fetchCmd.Flags().String("instance", "", "limit to repos from this instance")
 	fetchCmd.Flags().Bool("full", false, "re-fetch all data (ignore incremental state)")
 	fetchCmd.Flags().Bool("dry-run", false, "show what would be fetched without making API calls")
-	fetchCmd.Flags().String("since", "", "only fetch PRs updated after this date")
+	fetchCmd.Flags().String("since", "", "only fetch PRs updated after this date (YYYY-MM-DD)")
+	fetchCmd.Flags().String("until", "", "only fetch PRs updated before this date (YYYY-MM-DD)")
+	fetchCmd.Flags().String("preset", "", "date preset (e.g., last-30d, last-90d, this-month)")
 	fetchCmd.Flags().String("states", "", "PR states: open,closed,all")
 	rootCmd.AddCommand(fetchCmd)
 }
@@ -46,6 +48,31 @@ func runFetch(cmd *cobra.Command, args []string) error {
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 	repoFlags, _ := cmd.Flags().GetStringSlice("repo")
 	teamFlags, _ := cmd.Flags().GetStringSlice("team")
+
+	// Resolve time bounds for fetch
+	sinceStr, _ := cmd.Flags().GetString("since")
+	untilStr, _ := cmd.Flags().GetString("until")
+	preset, _ := cmd.Flags().GetString("preset")
+
+	var sinceDateStr, untilDateStr string
+	if preset != "" {
+		presetStart, presetEnd := resolvePreset(preset, time.Now())
+		sinceDateStr = presetStart.Format(time.RFC3339)
+		untilDateStr = presetEnd.AddDate(0, 0, 1).Format(time.RFC3339) // end of day
+	}
+	// Explicit --since/--until override preset
+	if sinceStr != "" {
+		t := parseDate(sinceStr, time.Time{})
+		if !t.IsZero() {
+			sinceDateStr = t.Format(time.RFC3339)
+		}
+	}
+	if untilStr != "" {
+		t := parseDate(untilStr, time.Time{})
+		if !t.IsZero() {
+			untilDateStr = t.AddDate(0, 0, 1).Format(time.RFC3339) // end of day
+		}
+	}
 
 	// Resolve which repos to fetch
 	type repoRef struct {
@@ -137,6 +164,12 @@ func runFetch(cmd *cobra.Command, args []string) error {
 		if dryRun {
 			mode = "dry-run"
 		}
+		if sinceDateStr != "" {
+			mode += ", since " + sinceDateStr[:10]
+		}
+		if untilDateStr != "" {
+			mode += ", until " + untilDateStr[:10]
+		}
 		fmt.Fprintf(os.Stderr, "Fetching %d repo(s) [%s]\n", len(repos), mode)
 	}
 
@@ -196,6 +229,8 @@ func runFetch(cmd *cobra.Command, args []string) error {
 			PerPage:      settings.Fetch.PerPage,
 			TestPatterns: testPatterns,
 			Verbose:      verbose,
+			Since:        sinceDateStr,
+			Until:        untilDateStr,
 			Log: func(format string, args ...interface{}) {
 				if !quiet {
 					fmt.Fprintf(os.Stderr, format+"\n", args...)

@@ -118,6 +118,17 @@ func (c *Client) ListPullRequests(owner, repo string, opts provider.ListPROption
 		allBeforeSince := true
 		for _, ghPR := range ghPRs {
 			pr := normalizePR(ghPR)
+
+			// Skip PRs updated after the until bound
+			if opts.Until != "" && pr.UpdatedAt > opts.Until {
+				continue
+			}
+
+			// Skip PRs updated before the since bound
+			if opts.Since != "" && pr.UpdatedAt < opts.Since {
+				continue
+			}
+
 			allPRs = append(allPRs, pr)
 			if opts.Since != "" && pr.UpdatedAt >= opts.Since {
 				allBeforeSince = false

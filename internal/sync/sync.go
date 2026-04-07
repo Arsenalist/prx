@@ -29,6 +29,8 @@ type Options struct {
 	PerPage      int
 	TestPatterns []*regexp.Regexp
 	Verbose      bool
+	Since        string // ISO 8601 — override incremental since (filters by updated_at)
+	Until        string // ISO 8601 — upper bound on updated_at
 	Log          func(format string, args ...interface{}) // Progress callback
 }
 
@@ -54,7 +56,10 @@ func (e *Engine) SyncRepo(instanceID, repoID int64, owner, repo string, opts Opt
 
 	// Determine the "since" timestamp for incremental fetch
 	var since string
-	if !opts.Full {
+	if opts.Since != "" {
+		// Command-line since overrides DB metadata
+		since = opts.Since
+	} else if !opts.Full {
 		meta, err := e.store.GetFetchMetadata(repoID)
 		if err != nil {
 			return nil, fmt.Errorf("reading fetch metadata: %w", err)
@@ -89,6 +94,7 @@ func (e *Engine) SyncRepo(instanceID, repoID int64, owner, repo string, opts Opt
 		State:   state,
 		PerPage: opts.PerPage,
 		Since:   since,
+		Until:   opts.Until,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("listing PRs: %w", err)

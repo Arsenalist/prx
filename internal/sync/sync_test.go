@@ -363,6 +363,110 @@ func TestSyncMapsNewProviderFields(t *testing.T) {
 	assert.Equal(t, "approved", rows[0]["review_state"])
 }
 
+func TestSyncSinceOverridesDBMetadata(t *testing.T) {
+	s := newTestStore(t)
+	_, repoID := setupRepo(t, s)
+
+	// Set fetch metadata so incremental since would be "2026-03-01T00:00:00Z"
+	s.UpdateFetchMetadata(store.FetchMetadataRecord{
+		RepoID:        repoID,
+		LastFetchAt:   "2026-03-10T00:00:00Z",
+		LastUpdatedAt: "2026-03-01T00:00:00Z",
+		PRCount:       5,
+	})
+
+	var capturedOpts provider.ListPROptions
+	mock := &mockProviderCapture{
+		mockProvider: mockProvider{
+			prs: []provider.PullRequest{},
+		},
+		onList: func(opts provider.ListPROptions) {
+			capturedOpts = opts
+		},
+	}
+
+	engine := NewEngine(mock, s)
+	_, err := engine.SyncRepo(1, repoID, "org", "repo", Options{
+		PerPage: 100,
+		Since:   "2026-02-01T00:00:00Z", // Earlier than DB metadata
+	})
+
+	require.NoError(t, err)
+	// Command-line since should override DB metadata's "2026-03-01"
+	assert.Equal(t, "2026-02-01T00:00:00Z", capturedOpts.Since)
+}
+
+func TestSyncUntilPassedToProvider(t *testing.T) {
+	s := newTestStore(t)
+	_, repoID := setupRepo(t, s)
+
+	var capturedOpts provider.ListPROptions
+	mock := &mockProviderCapture{
+		mockProvider: mockProvider{
+			prs: []provider.PullRequest{},
+		},
+		onList: func(opts provider.ListPROptions) {
+			capturedOpts = opts
+		},
+	}
+
+	engine := NewEngine(mock, s)
+	_, err := engine.SyncRepo(1, repoID, "org", "repo", Options{
+		PerPage: 100,
+		Since:   "2026-01-01T00:00:00Z",
+		Until:   "2026-03-31T00:00:00Z",
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "2026-01-01T00:00:00Z", capturedOpts.Since)
+	assert.Equal(t, "2026-03-31T00:00:00Z", capturedOpts.Until)
+}
+
+func TestSyncWithoutSinceUsesDBMetadata(t *testing.T) {
+	s := newTestStore(t)
+	_, repoID := setupRepo(t, s)
+
+	// Set fetch metadata
+	s.UpdateFetchMetadata(store.FetchMetadataRecord{
+		RepoID:        repoID,
+		LastFetchAt:   "2026-03-10T00:00:00Z",
+		LastUpdatedAt: "2026-03-05T00:00:00Z",
+		PRCount:       5,
+	})
+
+	var capturedOpts provider.ListPROptions
+	mock := &mockProviderCapture{
+		mockProvider: mockProvider{
+			prs: []provider.PullRequest{},
+		},
+		onList: func(opts provider.ListPROptions) {
+			capturedOpts = opts
+		},
+	}
+
+	engine := NewEngine(mock, s)
+	_, err := engine.SyncRepo(1, repoID, "org", "repo", Options{
+		PerPage: 100,
+		// No Since set — should fall back to DB metadata
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "2026-03-05T00:00:00Z", capturedOpts.Since)
+}
+
+// mockProviderCapture wraps mockProvider to capture ListPullRequests options.
+type mockProviderCapture struct {
+	mockProvider
+	onList func(opts provider.ListPROptions)
+}
+
+func (m *mockProviderCapture) ListPullRequests(owner, repo string, opts provider.ListPROptions) ([]provider.PullRequest, error) {
+	if m.onList != nil {
+		m.onList(opts)
+	}
+	return m.mockProvider.ListPullRequests(owner, repo, opts)
+}
+
 func TestCompileTestPatterns(t *testing.T) {
 	patterns := CompileTestPatterns([]string{
 		"_test\\.go$",

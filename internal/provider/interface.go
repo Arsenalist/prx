@@ -27,6 +27,7 @@ type ListPROptions struct {
 	State   string // "open", "closed", "all"
 	PerPage int
 	Since   string // ISO 8601 — only PRs updated after this time
+	Until   string // ISO 8601 — only PRs updated before this time
 }
 
 // PullRequest is the normalized PR representation across providers.
