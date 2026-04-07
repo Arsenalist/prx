@@ -15,15 +15,28 @@ description: >
 
 prx fetches pull request data from GitHub (including Enterprise), stores it in a local SQLite database, and computes developer productivity metrics, review analytics, and team reports.
 
+**IMPORTANT — Hard rules for agents:**
+- All state lives in the SQLite database created by `prx init`. There are no YAML or config files.
+- **NEVER assume a GitHub API URL.** Always run `prx instance list` first and use whatever is already configured.
+- Use the instance name from `prx instance list` when adding repos — don't hardcode "github".
+- Tokens are auto-resolved (see below). Only ask the user if fetching fails with an auth error.
+
 ## Agent Decision Workflow
 
 Before running any command, follow this checklist:
 
 1. **Does the database exist?** Run `prx status`. If it fails, run `prx init` first.
-2. **Is an instance configured?** Run `prx instance list`. If empty, add one (see Setup).
-3. **Are the repos tracked?** Run `prx repo list`. If the needed repo isn't listed, `prx repo add owner/repo --instance <name>`.
-4. **Is data available for the requested time range?** Run `prx status` (or `prx status --team X`) to check last fetch time and PR counts. If data is stale or missing for the requested period, fetch it — but be smart (see Smart Fetching below).
-5. **Run the actual command** (analyze, report, export, summarize).
+2. **Is an instance configured?** Run `prx instance list`.
+   - If an instance exists: **use its name** for all repo operations. Do NOT create a new one.
+   - If empty: **ASK the user** for their GitHub API URL (e.g. `https://ghe.company.com/api/v3`) and the environment variable name that holds the token. NEVER default to `https://api.github.com` — the user may be on an enterprise instance.
+3. **Is a token available?** The fetch command auto-resolves tokens from multiple sources in order:
+   - The instance's configured `token_env` (e.g. `GHE_TOKEN`)
+   - Common env vars: `GH_TOKEN`, `GITHUB_TOKEN`, `GITHUB_API_TOKEN`, `GHE_TOKEN`
+   - `git config --global rbc-ctx.oauth-token` (set by enterprise tooling)
+   - You do NOT need to verify this manually. If a token cannot be found, `prx fetch` will fail with an auth error — only then ask the user to set the appropriate env var.
+4. **Are the repos tracked?** Run `prx repo list`. If the needed repo isn't listed, add it with `prx repo add owner/repo --instance <name>` using the instance name from step 2.
+5. **Is data available for the requested time range?** Run `prx status` (or `prx status --team X`) to check last fetch time and PR counts. If data is stale or missing for the requested period, fetch it — but be smart (see Smart Fetching below).
+6. **Run the actual command** (analyze, report, export, summarize).
 
 ## Natural Language → Commands
 
@@ -77,45 +90,28 @@ prx init
 ```
 
 ### 2. Add a GitHub instance
-```bash
-# GitHub.com (most common)
-prx instance add github --url https://api.github.com --token-env GITHUB_TOKEN
 
+**Always ask the user** for their GitHub API URL and token env var. Do not assume defaults.
+
+```bash
+prx instance add <name> --url <api-url> --token-env <TOKEN_ENV_VAR>
+```
+
+Examples (for reference only — ask the user which applies):
+```bash
 # GitHub Enterprise
 prx instance add ghe --url https://ghe.company.com/api/v3 --token-env GHE_TOKEN --tls-skip-verify
-```
-The `--token-env` flag specifies the **environment variable name** (not the token itself) that holds the API token. You must set that environment variable before running `prx fetch`:
 
-```bash
-# macOS / Linux
-export GITHUB_TOKEN=ghp_your_personal_access_token_here
-
-# To persist across sessions, add to ~/.bashrc, ~/.zshrc, or ~/.profile:
-echo 'export GITHUB_TOKEN=ghp_your_token' >> ~/.zshrc
+# Public GitHub.com
+prx instance add github --url https://api.github.com --token-env GITHUB_TOKEN
 ```
 
-```powershell
-# Windows (PowerShell)
-$env:GITHUB_TOKEN = "ghp_your_personal_access_token_here"
-
-# To persist across sessions:
-[System.Environment]::SetEnvironmentVariable("GITHUB_TOKEN", "ghp_your_token", "User")
-```
-
-```cmd
-# Windows (Command Prompt)
-set GITHUB_TOKEN=ghp_your_personal_access_token_here
-
-# To persist across sessions:
-setx GITHUB_TOKEN "ghp_your_token"
-```
-
-The token needs `repo` scope (for private repos) or just `public_repo` scope (for public repos only). Create one at GitHub > Settings > Developer settings > Personal access tokens.
+The `--token-env` flag specifies the **environment variable name** (not the token itself). The token is auto-resolved at fetch time from multiple sources (see Agent Decision Workflow step 3), so the user may not need to set anything explicitly.
 
 ### 3. Add repositories to track
+Use the instance name from `prx instance list`:
 ```bash
-prx repo add owner/repo --instance github
-prx repo add org/another-repo --instance github
+prx repo add owner/repo --instance <instance-name>
 ```
 
 ### 4. (Optional) Organize repos into teams
@@ -309,9 +305,6 @@ prx backfill
 
 # Delete all data
 prx reset
-
-# Import legacy YAML config
-prx import --config prx.yaml
 ```
 
 ## Common Patterns
