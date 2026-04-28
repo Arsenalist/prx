@@ -88,25 +88,19 @@ func runRepoRemove(cmd *cobra.Command, args []string) error {
 
 	fullName := args[0]
 
-	// Find the repo to get its instance ID
-	repos, err := db.ListRepositories()
+	repos, err := db.FindRepositoriesByFullName(fullName)
 	if err != nil {
 		return err
 	}
-
-	found := false
-	for _, r := range repos {
-		if r.FullName == fullName {
-			if err := db.DeleteRepository(r.InstanceID, fullName); err != nil {
-				return fmt.Errorf("removing repository: %w", err)
-			}
-			found = true
-			break
-		}
+	if len(repos) == 0 {
+		return fmt.Errorf("repository %q not found", fullName)
+	}
+	if len(repos) > 1 {
+		return fmt.Errorf("repository %q exists in multiple instances; use --instance to specify which one", fullName)
 	}
 
-	if !found {
-		return fmt.Errorf("repository %q not found", fullName)
+	if err := db.DeleteRepository(repos[0].InstanceID, fullName); err != nil {
+		return fmt.Errorf("removing repository: %w", err)
 	}
 
 	fmt.Printf("Repository %q removed.\n", fullName)

@@ -110,21 +110,17 @@ func runDBRaw(cmd *cobra.Command, args []string) error {
 	}
 
 	// Find repo
-	repos, err := db.ListRepositories()
+	repos, err := db.FindRepositoriesByFullName(repoName)
 	if err != nil {
 		return err
 	}
-
-	var repoID int64
-	for _, r := range repos {
-		if r.FullName == repoName {
-			repoID = r.ID
-			break
-		}
-	}
-	if repoID == 0 {
+	if len(repos) == 0 {
 		return fmt.Errorf("repo %q not found in database", repoName)
 	}
+	if len(repos) > 1 {
+		return fmt.Errorf("repo %q exists in multiple instances; specify the instance", repoName)
+	}
+	repoID := repos[0].ID
 
 	// Query raw data
 	rows, err := db.RawQuery(

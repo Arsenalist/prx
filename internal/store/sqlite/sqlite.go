@@ -222,6 +222,24 @@ func (s *SQLiteStore) GetRepositoryByName(instanceID int64, fullName string) (*s
 	return &r, err
 }
 
+func (s *SQLiteStore) FindRepositoriesByFullName(fullName string) ([]store.RepositoryRecord, error) {
+	rows, err := s.db.Query("SELECT id, instance_id, owner, name, full_name FROM repositories WHERE full_name = ?", fullName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var repos []store.RepositoryRecord
+	for rows.Next() {
+		var r store.RepositoryRecord
+		if err := rows.Scan(&r.ID, &r.InstanceID, &r.Owner, &r.Name, &r.FullName); err != nil {
+			return nil, err
+		}
+		repos = append(repos, r)
+	}
+	return repos, rows.Err()
+}
+
 func (s *SQLiteStore) DeleteRepository(instanceID int64, fullName string) error {
 	result, err := s.db.Exec("DELETE FROM repositories WHERE instance_id = ? AND full_name = ?", instanceID, fullName)
 	if err != nil {

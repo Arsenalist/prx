@@ -50,6 +50,7 @@ type Store interface {
 	UpdateFetchMetadata(meta FetchMetadataRecord) error
 	ListRepositories() ([]RepositoryRecord, error)
 	GetRepositoryByName(instanceID int64, fullName string) (*RepositoryRecord, error)
+	FindRepositoriesByFullName(fullName string) ([]RepositoryRecord, error)
 	GetInstanceByName(name string) (*InstanceRecord, error)
 
 	// Power user / agent

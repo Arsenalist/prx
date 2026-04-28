@@ -50,7 +50,7 @@ func runSummarize(cmd *cobra.Command, args []string) error {
 		EndDate:   endStr,
 	}
 
-	repoNames, err := resolveRepoIDs(db, repoFlags, &filters)
+	repoNames, err := resolveRepoIDs(db, repoFlags, &filters, nil)
 	if err != nil {
 		return err
 	}

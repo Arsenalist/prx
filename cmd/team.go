@@ -130,23 +130,18 @@ func runTeamAddRepo(cmd *cobra.Command, args []string) error {
 	}
 
 	// Find repo by full name
-	repos, err := db.ListRepositories()
+	repos, err := db.FindRepositoriesByFullName(repoFullName)
 	if err != nil {
 		return err
 	}
-
-	var repoID int64
-	for _, r := range repos {
-		if r.FullName == repoFullName {
-			repoID = r.ID
-			break
-		}
-	}
-	if repoID == 0 {
+	if len(repos) == 0 {
 		return fmt.Errorf("repository %q not found (use `prx repo add` first)", repoFullName)
 	}
+	if len(repos) > 1 {
+		return fmt.Errorf("repository %q exists in multiple instances; use `prx team add-repo` with a specific instance", repoFullName)
+	}
 
-	if err := db.AddTeamRepo(team.ID, repoID); err != nil {
+	if err := db.AddTeamRepo(team.ID, repos[0].ID); err != nil {
 		return fmt.Errorf("adding repo to team: %w", err)
 	}
 
@@ -172,23 +167,18 @@ func runTeamRemoveRepo(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("team %q not found", teamName)
 	}
 
-	repos, err := db.ListRepositories()
+	repos, err := db.FindRepositoriesByFullName(repoFullName)
 	if err != nil {
 		return err
 	}
-
-	var repoID int64
-	for _, r := range repos {
-		if r.FullName == repoFullName {
-			repoID = r.ID
-			break
-		}
-	}
-	if repoID == 0 {
+	if len(repos) == 0 {
 		return fmt.Errorf("repository %q not found", repoFullName)
 	}
+	if len(repos) > 1 {
+		return fmt.Errorf("repository %q exists in multiple instances; specify which to remove", repoFullName)
+	}
 
-	if err := db.RemoveTeamRepo(team.ID, repoID); err != nil {
+	if err := db.RemoveTeamRepo(team.ID, repos[0].ID); err != nil {
 		return fmt.Errorf("removing repo from team: %w", err)
 	}
 
@@ -258,9 +248,10 @@ func runTeamShow(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// resolveTeamReposFromDB expands team names to repo full names using the DB.
-func resolveTeamReposFromDB(db *sqlite.SQLiteStore, teamFlags []string) ([]string, error) {
-	var names []string
+// resolveTeamReposFromDB expands team names to repository records using the DB.
+// Returns full RepositoryRecord values so callers can use IDs directly.
+func resolveTeamReposFromDB(db *sqlite.SQLiteStore, teamFlags []string) ([]store.RepositoryRecord, error) {
+	var repos []store.RepositoryRecord
 	for _, teamName := range teamFlags {
 		team, err := db.GetTeamByName(teamName)
 		if err != nil {
@@ -270,15 +261,13 @@ func resolveTeamReposFromDB(db *sqlite.SQLiteStore, teamFlags []string) ([]strin
 			fmt.Fprintf(os.Stderr, "Warning: team %q not found, skipping\n", teamName)
 			continue
 		}
-		repos, err := db.GetTeamRepos(team.ID)
+		teamRepos, err := db.GetTeamRepos(team.ID)
 		if err != nil {
 			return nil, err
 		}
-		for _, r := range repos {
-			names = append(names, r.FullName)
-		}
+		repos = append(repos, teamRepos...)
 	}
-	return names, nil
+	return repos, nil
 }
 
 // teamNameFromFlags returns the team name for metadata (if a single team is selected).

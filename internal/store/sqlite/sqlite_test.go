@@ -283,6 +283,48 @@ func TestFetchMetadata(t *testing.T) {
 	assert.Equal(t, 50, meta.PRCount)
 }
 
+func TestFindRepositoriesByFullName(t *testing.T) {
+	s := newTestDB(t)
+	inst1ID, _ := s.UpsertInstance(store.InstanceRecord{
+		Name: "cloud", Type: "github", BaseURL: "https://api.github.com",
+	})
+	inst2ID, _ := s.UpsertInstance(store.InstanceRecord{
+		Name: "enterprise", Type: "github", BaseURL: "https://github.corp.com/api/v3",
+	})
+
+	// Same full_name in two instances
+	repo1ID, _ := s.UpsertRepository(store.RepositoryRecord{
+		InstanceID: inst1ID, Owner: "org", Name: "api", FullName: "org/api",
+	})
+	repo2ID, _ := s.UpsertRepository(store.RepositoryRecord{
+		InstanceID: inst2ID, Owner: "org", Name: "api", FullName: "org/api",
+	})
+
+	// Unique name
+	repo3ID, _ := s.UpsertRepository(store.RepositoryRecord{
+		InstanceID: inst1ID, Owner: "org", Name: "web", FullName: "org/web",
+	})
+
+	// Finds both repos with same name
+	repos, err := s.FindRepositoriesByFullName("org/api")
+	require.NoError(t, err)
+	assert.Len(t, repos, 2)
+	ids := []int64{repos[0].ID, repos[1].ID}
+	assert.Contains(t, ids, repo1ID)
+	assert.Contains(t, ids, repo2ID)
+
+	// Finds unique repo
+	repos, err = s.FindRepositoriesByFullName("org/web")
+	require.NoError(t, err)
+	assert.Len(t, repos, 1)
+	assert.Equal(t, repo3ID, repos[0].ID)
+
+	// Returns empty for unknown
+	repos, err = s.FindRepositoriesByFullName("org/nonexistent")
+	require.NoError(t, err)
+	assert.Len(t, repos, 0)
+}
+
 func TestListPullRequestsFilters(t *testing.T) {
 	s := newTestDB(t)
 	instID, _ := s.UpsertInstance(store.InstanceRecord{

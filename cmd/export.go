@@ -52,15 +52,18 @@ func runExport(cmd *cobra.Command, args []string) error {
 		EndDate:   endStr,
 	}
 
+	var teamRepoIDs []int64
 	if len(teamFlags) > 0 {
 		teamRepos, err := resolveTeamReposFromDB(db, teamFlags)
 		if err != nil {
 			return err
 		}
-		repoFlags = append(repoFlags, teamRepos...)
+		for _, r := range teamRepos {
+			teamRepoIDs = append(teamRepoIDs, r.ID)
+		}
 	}
 
-	if _, err := resolveRepoIDs(db, repoFlags, &filters); err != nil {
+	if _, err := resolveRepoIDs(db, repoFlags, &filters, teamRepoIDs); err != nil {
 		return err
 	}
 

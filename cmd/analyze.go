@@ -64,18 +64,19 @@ func runAnalyze(cmd *cobra.Command, args []string) error {
 		EndDate:   endStr,
 	}
 
-	// If --team specified, expand to repo names from DB
+	// If --team specified, resolve to repo records (with IDs) from DB
+	var teamRepoIDs []int64
 	if len(teamFlags) > 0 {
 		teamRepos, err := resolveTeamReposFromDB(db, teamFlags)
 		if err != nil {
 			return err
 		}
-		for _, name := range teamRepos {
-			repoFlags = append(repoFlags, name)
+		for _, r := range teamRepos {
+			teamRepoIDs = append(teamRepoIDs, r.ID)
 		}
 	}
 
-	repoNames, err := resolveRepoIDs(db, repoFlags, &filters)
+	repoNames, err := resolveRepoIDs(db, repoFlags, &filters, teamRepoIDs)
 	if err != nil {
 		return err
 	}
@@ -171,12 +172,57 @@ func writeMarkdown(cmd *cobra.Command, s *config.Settings, result *metrics.Analy
 	return nil
 }
 
-func resolveRepoIDs(db *sqlite.SQLiteStore, repoFlags []string, filters *store.PRFilters) ([]string, error) {
+func resolveRepoIDs(db *sqlite.SQLiteStore, repoFlags []string, filters *store.PRFilters, teamRepoIDs []int64) ([]string, error) {
 	repos, err := db.ListRepositories()
 	if err != nil {
 		return nil, err
 	}
 
+	// Build ID→name map for lookups
+	idToName := make(map[int64]string)
+	for _, r := range repos {
+		idToName[r.ID] = r.FullName
+	}
+
+	// If team provided pre-resolved IDs, use them directly (no name matching)
+	if len(teamRepoIDs) > 0 && len(repoFlags) == 0 {
+		var names []string
+		for _, id := range teamRepoIDs {
+			if name, ok := idToName[id]; ok {
+				names = append(names, name)
+			}
+		}
+		filters.RepoIDs = teamRepoIDs
+		return names, nil
+	}
+
+	// If team IDs + explicit repo flags, combine them
+	if len(teamRepoIDs) > 0 && len(repoFlags) > 0 {
+		nameToID := make(map[string]int64)
+		for _, r := range repos {
+			nameToID[r.FullName] = r.ID
+		}
+		ids := append([]int64{}, teamRepoIDs...)
+		var names []string
+		for _, id := range teamRepoIDs {
+			if name, ok := idToName[id]; ok {
+				names = append(names, name)
+			}
+		}
+		for _, name := range repoFlags {
+			if id, ok := nameToID[name]; ok {
+				ids = append(ids, id)
+				names = append(names, name)
+			}
+		}
+		if len(ids) == 0 {
+			return nil, fmt.Errorf("no matching repos found in database")
+		}
+		filters.RepoIDs = ids
+		return names, nil
+	}
+
+	// No team, no flags — use all repos
 	if len(repoFlags) == 0 && len(repos) > 0 {
 		var ids []int64
 		var names []string
@@ -188,16 +234,16 @@ func resolveRepoIDs(db *sqlite.SQLiteStore, repoFlags []string, filters *store.P
 		return names, nil
 	}
 
-	// Match flags to DB repos
-	repoMap := make(map[string]int64)
+	// Match repo flags to DB repos by name
+	nameToID := make(map[string]int64)
 	for _, r := range repos {
-		repoMap[r.FullName] = r.ID
+		nameToID[r.FullName] = r.ID
 	}
 
 	var ids []int64
 	var names []string
 	for _, name := range repoFlags {
-		if id, ok := repoMap[name]; ok {
+		if id, ok := nameToID[name]; ok {
 			ids = append(ids, id)
 			names = append(names, name)
 		}
