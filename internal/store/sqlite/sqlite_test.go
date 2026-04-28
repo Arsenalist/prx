@@ -338,6 +338,70 @@ func TestListPullRequestsFilters(t *testing.T) {
 	assert.Equal(t, 3, prs[0].Number)
 }
 
+func TestListPullRequestsDateRangeIncludesActivity(t *testing.T) {
+	s := newTestDB(t)
+	instID, _ := s.UpsertInstance(store.InstanceRecord{
+		Name: "default", Type: "github", BaseURL: "https://api.github.com",
+	})
+	repoID, _ := s.UpsertRepository(store.RepositoryRecord{
+		InstanceID: instID, Owner: "org", Name: "repo", FullName: "org/repo",
+	})
+
+	// PR created before range, but updated during range
+	_, err := s.UpsertPullRequest(store.PullRequestRecord{
+		RepoID: repoID, Number: 1, Title: "Old PR updated in range", State: "open", Author: "alice", URL: "u",
+		CreatedAt: "2026-01-05T10:00:00Z", UpdatedAt: "2026-02-10T10:00:00Z",
+	})
+	require.NoError(t, err)
+
+	// PR created before range, merged during range
+	mergedAt := "2026-02-05T10:00:00Z"
+	_, err = s.UpsertPullRequest(store.PullRequestRecord{
+		RepoID: repoID, Number: 2, Title: "Old PR merged in range", State: "merged", Author: "bob", URL: "u",
+		CreatedAt: "2026-01-10T10:00:00Z", UpdatedAt: "2026-01-15T10:00:00Z", MergedAt: &mergedAt,
+	})
+	require.NoError(t, err)
+
+	// PR created before range, closed during range
+	closedAt := "2026-02-20T10:00:00Z"
+	_, err = s.UpsertPullRequest(store.PullRequestRecord{
+		RepoID: repoID, Number: 3, Title: "Old PR closed in range", State: "closed", Author: "charlie", URL: "u",
+		CreatedAt: "2026-01-03T10:00:00Z", UpdatedAt: "2026-01-04T10:00:00Z", ClosedAt: &closedAt,
+	})
+	require.NoError(t, err)
+
+	// PR created during range
+	_, err = s.UpsertPullRequest(store.PullRequestRecord{
+		RepoID: repoID, Number: 4, Title: "PR created in range", State: "open", Author: "alice", URL: "u",
+		CreatedAt: "2026-02-12T10:00:00Z", UpdatedAt: "2026-02-12T10:00:00Z",
+	})
+	require.NoError(t, err)
+
+	// PR with no activity in range (created and last updated before range)
+	oldMergedAt := "2025-12-10T10:00:00Z"
+	_, err = s.UpsertPullRequest(store.PullRequestRecord{
+		RepoID: repoID, Number: 5, Title: "Completely outside range", State: "merged", Author: "alice", URL: "u",
+		CreatedAt: "2025-12-01T10:00:00Z", UpdatedAt: "2025-12-05T10:00:00Z", MergedAt: &oldMergedAt,
+	})
+	require.NoError(t, err)
+
+	// Date range: Feb 2026
+	prs, err := s.ListPullRequests(store.PRFilters{StartDate: "2026-02-01", EndDate: "2026-02-28"})
+	require.NoError(t, err)
+
+	// Should include PRs 1-4 (all had activity in Feb), exclude PR 5
+	assert.Len(t, prs, 4)
+	numbers := make([]int, len(prs))
+	for i, pr := range prs {
+		numbers[i] = pr.Number
+	}
+	assert.Contains(t, numbers, 1, "PR updated in range should be included")
+	assert.Contains(t, numbers, 2, "PR merged in range should be included")
+	assert.Contains(t, numbers, 3, "PR closed in range should be included")
+	assert.Contains(t, numbers, 4, "PR created in range should be included")
+	assert.NotContains(t, numbers, 5, "PR with no activity in range should be excluded")
+}
+
 func TestRawQuery(t *testing.T) {
 	s := newTestDB(t)
 	instID, _ := s.UpsertInstance(store.InstanceRecord{

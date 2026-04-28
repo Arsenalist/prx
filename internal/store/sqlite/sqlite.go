@@ -488,13 +488,24 @@ func (s *SQLiteStore) ListPullRequests(filters store.PRFilters) ([]store.PullReq
 		query += " AND state IN (" + strings.Join(placeholders, ",") + ")"
 	}
 
-	if filters.StartDate != "" {
-		query += " AND created_at >= ?"
-		args = append(args, filters.StartDate)
-	}
-	if filters.EndDate != "" {
+	if filters.StartDate != "" && filters.EndDate != "" {
+		endDateFull := filters.EndDate + "T23:59:59Z"
+		query += ` AND (
+			(created_at >= ? AND created_at <= ?)
+			OR (updated_at >= ? AND updated_at <= ?)
+			OR (merged_at >= ? AND merged_at <= ?)
+			OR (closed_at >= ? AND closed_at <= ?)
+		)`
+		args = append(args, filters.StartDate, endDateFull, filters.StartDate, endDateFull, filters.StartDate, endDateFull, filters.StartDate, endDateFull)
+	} else if filters.StartDate != "" {
+		query += ` AND (
+			created_at >= ? OR updated_at >= ? OR merged_at >= ? OR closed_at >= ?
+		)`
+		args = append(args, filters.StartDate, filters.StartDate, filters.StartDate, filters.StartDate)
+	} else if filters.EndDate != "" {
+		endDateFull := filters.EndDate + "T23:59:59Z"
 		query += " AND created_at <= ?"
-		args = append(args, filters.EndDate+"T23:59:59Z")
+		args = append(args, endDateFull)
 	}
 
 	query += " ORDER BY created_at DESC"
